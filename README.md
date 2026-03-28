@@ -52,7 +52,7 @@ On first use, the AI will ask for these fields:
 
 > **Tip**: R2.dev URLs have rate limits. For production use, bind a custom domain to your bucket and use that as `public_url`.
 
-The AI will automatically save these to `config.json`. No repeat setup needed.
+The AI will automatically save these to `~/.md-web/config.json`. No repeat setup needed.
 
 ## Usage
 
@@ -72,10 +72,9 @@ The AI returns a link — click to view the rendered document in your browser.
 ## File Structure
 
 ```yaml
-md-web/
+md-web/                     # Skill directory (managed by ClawHub, may be replaced on upgrade)
 ├── SKILL.md              # AI instruction file
 ├── upload.js             # Upload script (pure Node.js, zero dependencies)
-├── config.json           # Bucket config (created by AI on first use, gitignored)
 ├── README.md             # This document
 ├── README.zh.md          # Chinese documentation
 └── docsify-server/       # Docsify server files (auto-deployed on first upload)
@@ -86,6 +85,10 @@ md-web/
         ├── docsify.min.js
         ├── vue.css
         └── ...
+
+~/.md-web/                  # User data directory (preserved across upgrades)
+├── config.json           # Bucket credentials & settings (created on first use)
+└── .deployed             # Deploy fingerprint (tracks server deployment state)
 ```
 
 ## Other S3-Compatible Services

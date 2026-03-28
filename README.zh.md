@@ -52,7 +52,7 @@
 
 > **提示**：R2.dev 子域有速率限制，生产环境建议为桶绑定自定义域名作为 `public_url`。
 
-AI 会自动将配置写入 `config.json`，之后不再需要重复配置。
+AI 会自动将配置写入 `~/.md-web/config.json`，之后不再需要重复配置。
 
 ## 使用方式
 
@@ -72,10 +72,9 @@ AI 会返回一个链接，点击即可在浏览器中阅读渲染后的文档�
 ## 文件结构
 
 ```yaml
-md-web/
+md-web/                     # Skill 目录（由 ClawHub 管理，升级时可能被替换）
 ├── SKILL.md              # AI 指令文件
 ├── upload.js             # 上传脚本（纯 Node.js，零依赖）
-├── config.json           # 存储桶配置（首次使用时由 AI 创建，已 gitignore）
 ├── README.md             # 英文文档
 ├── README.zh.md          # 本文档
 └── docsify-server/       # Docsify 服务文件（首次上传时自动部署）
@@ -86,6 +85,10 @@ md-web/
         ├── docsify.min.js
         ├── vue.css
         └── ...
+
+~/.md-web/                  # 用户数据目录（升级时保留）
+├── config.json           # 存储桶凭证与配置（首次使用时创建）
+└── .deployed             # 部署指纹（跟踪服务端部署状态）
 ```
 
 ## 其他 S3 兼容服务

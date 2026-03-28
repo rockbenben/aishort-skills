@@ -1,6 +1,6 @@
 ---
 name: md-web
-version: 1.0.5
+version: 1.0.6
 description: Turn any content into a web page with a shareable URL. Use when the user wants to preview, generate, share, export, or publish content as a web page.
 tags: [markdown, web, docsify, s3, preview, share, publish, export]
 homepage: https://github.com/rockbenben/md-web
@@ -34,7 +34,7 @@ Upload raw `.md` files to an S3-compatible storage bucket, where a pre-deployed 
 
 ### Step 1: Check configuration
 
-Check if `{SKILL_DIR}/config.json` exists. If it does NOT exist or has empty fields, follow the **Configuration** section below first.
+Check if `~/.md-web/config.json` exists (cross-platform: use the user's home directory). If it does NOT exist or has empty fields, follow the **Configuration** section below first.
 
 ### Step 2: Prepare the markdown file
 
@@ -72,7 +72,7 @@ This only needs to happen once. On subsequent runs, `config.json` already exists
 3. Ask about optional settings:
    - **region**: S3 region. Use `auto` for Cloudflare R2, or the actual region for AWS S3 (e.g., `us-east-1`). Default is `auto`.
    - **expire_days**: how many days before uploaded markdown files are automatically deleted from the bucket. Default is `30`. Set to `0` to keep files forever. The script sets an S3 lifecycle rule automatically — only timestamped uploads are affected; Docsify server files are never expired. **Note**: this requires the API token to have **Admin Read & Write** permission (not just Object Read & Write). If the token lacks permission, the script will warn but still upload normally — the user can set the lifecycle rule manually in the Cloudflare Dashboard instead.
-4. Write the config to `{SKILL_DIR}/config.json`:
+4. Write the config to `~/.md-web/config.json` (create the `~/.md-web/` directory if it doesn't exist). Use the user's home directory (`$HOME` on Unix, `%USERPROFILE%` on Windows):
 
 ```json
 {
@@ -106,7 +106,7 @@ This skill connects only to the S3 endpoint configured by the user in `config.js
 ## Security & privacy
 
 - All uploaded content is **publicly accessible** via the generated URL.
-- Credentials (`access_key`, `secret_key`) are stored locally in `config.json` (gitignored) and only sent to the user's own S3 endpoint for authentication.
+- Credentials (`access_key`, `secret_key`) are stored locally in `~/.md-web/config.json` (outside the skill directory, safe from upgrades) and only sent to the user's own S3 endpoint for authentication.
 - No telemetry, analytics, or data collection by the skill itself.
 - `upload.js` uses only Node.js built-in modules — no third-party dependencies.
 

@@ -5,10 +5,39 @@ var crypto = require("node:crypto");
 var https = require("node:https");
 var fs = require("node:fs");
 var path = require("node:path");
+var os = require("node:os");
 
 var SCRIPT_DIR = __dirname;
-var CONFIG_PATH = path.join(SCRIPT_DIR, "config.json");
-var DEPLOYED_FLAG = path.join(SCRIPT_DIR, ".deployed");
+
+// ── User data dir: upgrade-safe location in home dir ──
+var USER_CONFIG_DIR = path.join(os.homedir(), ".md-web");
+var USER_CONFIG_PATH = path.join(USER_CONFIG_DIR, "config.json");
+var LOCAL_CONFIG_PATH = path.join(SCRIPT_DIR, "config.json");
+var LOCAL_DEPLOYED_FLAG = path.join(SCRIPT_DIR, ".deployed");
+
+var CONFIG_PATH;
+if (fs.existsSync(USER_CONFIG_PATH)) {
+  CONFIG_PATH = USER_CONFIG_PATH;
+} else if (fs.existsSync(LOCAL_CONFIG_PATH)) {
+  // Migrate: copy old files to new location so future upgrades are safe
+  try {
+    fs.mkdirSync(USER_CONFIG_DIR, { recursive: true });
+    fs.copyFileSync(LOCAL_CONFIG_PATH, USER_CONFIG_PATH);
+    if (fs.existsSync(LOCAL_DEPLOYED_FLAG)) {
+      fs.copyFileSync(LOCAL_DEPLOYED_FLAG, path.join(USER_CONFIG_DIR, ".deployed"));
+    }
+    CONFIG_PATH = USER_CONFIG_PATH;
+    console.log("Config migrated to: " + USER_CONFIG_PATH);
+  } catch (_) {
+    CONFIG_PATH = LOCAL_CONFIG_PATH;
+  }
+} else {
+  CONFIG_PATH = USER_CONFIG_PATH;
+}
+
+// .deployed follows the same directory as config — if migration failed and we
+// fell back to skill dir, .deployed stays in skill dir too.
+var DEPLOYED_FLAG = path.join(path.dirname(CONFIG_PATH), ".deployed");
 
 // ── Load Configuration ──
 var CONFIG;
@@ -16,6 +45,7 @@ try {
   CONFIG = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
 } catch (e) {
   console.error("CONFIG_MISSING: " + CONFIG_PATH);
+  console.error("Run this skill once to configure, or create: " + USER_CONFIG_PATH);
   process.exit(1);
 }
 
