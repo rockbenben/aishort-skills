@@ -2,14 +2,74 @@ name: Publish to ClawHub
 
 on:
   workflow_dispatch:
+    inputs:
+      skill:
+        description: "Skill dir under skills/ to publish (blank = all skills)"
+        required: false
+        default: ""
   push:
     branches: [main]
     paths:
-      - "skills/md-web/**"
+      - "skills/**"
 
 jobs:
-  publish:
+  # Decide which skills to publish: on push, only the ones whose files changed;
+  # on manual dispatch, the chosen skill (or all). Avoids re-publishing an
+  # unchanged skill at the same version (ClawHub rejects duplicate versions).
+  detect:
     runs-on: ubuntu-latest
+    outputs:
+      skills: ${{ steps.list.outputs.skills }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Determine which skills to publish
+        id: list
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_SKILL: ${{ github.event.inputs.skill }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          all_skills() {
+            find skills -mindepth 1 -maxdepth 1 -type d \
+              -exec test -f '{}/SKILL.md' ';' -print | sed 's#^skills/##'
+          }
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ -n "$INPUT_SKILL" ]; then
+              dirs="$INPUT_SKILL"
+            else
+              dirs="$(all_skills)"
+            fi
+          else
+            base="$BEFORE"
+            if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+              base="$(git rev-parse HEAD^ 2>/dev/null || true)"
+            fi
+            if [ -z "$base" ]; then
+              dirs="$(all_skills)"
+            else
+              changed="$(git diff --name-only "$base" "$SHA" -- 'skills/' 2>/dev/null || true)"
+              dirs="$(printf '%s\n' "$changed" | grep '^skills/' | cut -d/ -f2 | sort -u || true)"
+              # keep only dirs that still have a SKILL.md (ignore deletes)
+              dirs="$(for d in $dirs; do [ -f "skills/$d/SKILL.md" ] && echo "$d"; done)"
+            fi
+          fi
+          json="$(printf '%s\n' "$dirs" | sed '/^$/d' | jq -R . | jq -cs .)"
+          echo "skills=$json" >> "$GITHUB_OUTPUT"
+          echo "Will publish: $json"
+
+  publish:
+    needs: detect
+    if: needs.detect.outputs.skills != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        skill: ${{ fromJson(needs.detect.outputs.skills) }}
     steps:
       - uses: actions/checkout@v6
 
@@ -30,10 +90,10 @@ jobs:
       - name: Extract version from SKILL.md
         id: version
         run: |
-          VERSION=$(grep '^version:' skills/md-web/SKILL.md | head -1 | sed 's/version:[[:space:]]*//')
+          VERSION=$(grep '^version:' "skills/${{ matrix.skill }}/SKILL.md" | head -1 | sed 's/version:[[:space:]]*//')
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Publish skill
-        run: clawhub publish skills/md-web --version "${{ steps.version.outputs.value }}"
+        run: clawhub publish "skills/${{ matrix.skill }}" --version "${{ steps.version.outputs.value }}"
         env:
           CLAWHUB_CONFIG_PATH: /tmp/clawhub/config.json
