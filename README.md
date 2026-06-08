@@ -4,9 +4,23 @@ Turn any content into a web page with a shareable URL. Uploads Markdown to an S3
 
 [中文文档](README.zh.md)
 
+## Installation
+
+Pick whichever matches your agent / CLI:
+
+```bash
+# ClawHub / OpenClaw
+clawhub install md-web
+
+# skills.sh (Vercel skills CLI — Claude Code, Cursor, and more)
+npx skills add rockbenben/md-web
+```
+
+Or install manually — clone this repo into your agent's skills directory (e.g. `~/.claude/skills/md-web`).
+
 ## Quick Start
 
-1. Install the skill: `clawhub install md-web`
+1. Install the skill (see above)
 2. On first use, the AI will guide you through bucket configuration
 3. After that, tell the AI "share as a link" whenever you want to publish content as a web page
 

@@ -4,9 +4,23 @@
 
 将任意内容转为网页并生成可分享的链接。上传 Markdown 到 S3 兼容存储桶，由 Docsify 自动渲染。
 
+## 安装
+
+按你使用的 agent / CLI 任选其一：
+
+```bash
+# ClawHub / OpenClaw
+clawhub install md-web
+
+# skills.sh（Vercel skills CLI —— 适用于 Claude Code、Cursor 等）
+npx skills add rockbenben/md-web
+```
+
+或手动安装 —— 将本仓库克隆到 agent 的 skills 目录（如 `~/.claude/skills/md-web`）。
+
 ## 快速开始
 
-1. 安装 skill：`clawhub install md-web`
+1. 安装 skill（见上方）
 2. 首次使用时，AI 会引导你填写存储桶配置
 3. 之后告诉 AI「用网页展示」即可将内容分享为链接
 
