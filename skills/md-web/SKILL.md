@@ -1,6 +1,6 @@
 ---
 name: md-web
-version: 1.0.6
+version: 1.0.7
 description: Render a markdown file as a beautiful, shareable web page in the browser instead of dumping long text in chat. Use when the user wants to preview, view, share, export, or publish markdown as a web page, wants a shareable link to content, or when you need to present long markdown without flooding the conversation.
 tags: [markdown, web, docsify, s3, preview, share, publish, export]
 homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/md-web
