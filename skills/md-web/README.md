@@ -13,7 +13,7 @@ Pick whichever matches your agent / CLI:
 clawhub install md-web
 
 # skills.sh (Vercel skills CLI — Claude Code, Cursor, and more)
-npx skills add rockbenben/md-web
+npx skills add rockbenben/aishort-skills
 ```
 
 Or install manually — clone this repo into your agent's skills directory (e.g. `~/.claude/skills/md-web`).

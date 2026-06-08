@@ -15,7 +15,7 @@ A collection of agent skills, installable via [ClawHub](https://clawhub.ai), [sk
 clawhub install md-web
 
 # skills.sh (Vercel skills CLI — Claude Code, Cursor, and more)
-npx skills add rockbenben/md-web
+npx skills add rockbenben/aishort-skills
 ```
 
 See each skill's own README for setup and usage details.

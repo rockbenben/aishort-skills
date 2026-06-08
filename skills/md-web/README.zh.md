@@ -13,7 +13,7 @@
 clawhub install md-web
 
 # skills.sh（Vercel skills CLI —— 适用于 Claude Code、Cursor 等）
-npx skills add rockbenben/md-web
+npx skills add rockbenben/aishort-skills
 ```
 
 或手动安装 —— 将本仓库克隆到 agent 的 skills 目录（如 `~/.claude/skills/md-web`）。
