@@ -5,9 +5,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "SKILL.md"
-      - "upload.js"
-      - "docsify-server/**"
+      - "skills/md-web/**"
 
 jobs:
   publish:
@@ -32,10 +30,10 @@ jobs:
       - name: Extract version from SKILL.md
         id: version
         run: |
-          VERSION=$(grep '^version:' SKILL.md | head -1 | sed 's/version:[[:space:]]*//')
+          VERSION=$(grep '^version:' skills/md-web/SKILL.md | head -1 | sed 's/version:[[:space:]]*//')
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Publish skill
-        run: clawhub publish . --version "${{ steps.version.outputs.value }}"
+        run: clawhub publish skills/md-web --version "${{ steps.version.outputs.value }}"
         env:
           CLAWHUB_CONFIG_PATH: /tmp/clawhub/config.json
