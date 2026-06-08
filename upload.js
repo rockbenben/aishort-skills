@@ -102,6 +102,20 @@ function uriEncodePath(p) {
   return p.split("/").map(uriEncode).join("/");
 }
 
+// Build the SigV4 canonical query string (also reused as the request's ?search).
+// Accepts a string ("lifecycle" → valueless param) or an object ({k: v, ...}).
+// Keys/values are URI-encoded and sorted by encoded key, per the SigV4 spec.
+function canonicalizeQuery(query) {
+  if (!query) return "";
+  var params = query;
+  if (typeof query === "string") { params = {}; params[query] = ""; }
+  return Object.keys(params)
+    .map(function (k) { return [uriEncode(k), uriEncode(String(params[k]))]; })
+    .sort(function (a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; })
+    .map(function (p) { return p[0] + "=" + p[1]; })
+    .join("&");
+}
+
 function parseR2Error(xml) {
   var code = (xml.match(/<Code>(.*?)<\/Code>/) || [])[1];
   var msg = (xml.match(/<Message>(.*?)<\/Message>/) || [])[1];
@@ -119,6 +133,7 @@ function s3Fetch(method, resourcePath, query, payload, extraHeaders) {
   if (!payload) payload = Buffer.alloc(0);
 
   var encodedPath = uriEncodePath(resourcePath);
+  var canonicalQS = canonicalizeQuery(query);
 
   return new Promise(function (resolve, reject) {
     var now = new Date();
@@ -141,7 +156,6 @@ function s3Fetch(method, resourcePath, query, payload, extraHeaders) {
     var sortedKeys = Object.keys(signHdrs).sort();
     var canonicalHeaders = sortedKeys.map(function (k) { return k + ":" + signHdrs[k]; }).join("\n") + "\n";
     var signedHeaders = sortedKeys.join(";");
-    var canonicalQS = query ? query + "=" : "";
     var canonicalRequest = method + "\n" + encodedPath + "\n" + canonicalQS + "\n" + canonicalHeaders + "\n" + signedHeaders + "\n" + payloadHash;
 
     var scope = dateStamp + "/" + region + "/s3/aws4_request";
@@ -165,7 +179,7 @@ function s3Fetch(method, resourcePath, query, payload, extraHeaders) {
     var req = https.request(
       {
         hostname: CONFIG.endpoint,
-        path: encodedPath + (query ? "?" + query : ""),
+        path: encodedPath + (canonicalQS ? "?" + canonicalQS : ""),
         method: method,
         timeout: 30000,
         agent: agent,
@@ -200,13 +214,27 @@ function cacheControlFor(remoteKey) {
   return CACHE_SHORT;
 }
 
-function uploadFile(localPath, remoteKey, contentType) {
-  var ct = contentType || getContentType(localPath);
-  var payload = fs.readFileSync(localPath);
+function putObject(payload, remoteKey, contentType) {
+  var ct = contentType || getContentType(remoteKey);
   return s3Fetch("PUT", "/" + CONFIG.bucket + "/" + remoteKey, null, payload, {
     "Content-Type": ct,
     "Cache-Control": cacheControlFor(remoteKey),
   }).then(function () { console.log("  OK  " + remoteKey); });
+}
+
+function uploadFile(localPath, remoteKey, contentType) {
+  return putObject(fs.readFileSync(localPath), remoteKey, contentType);
+}
+
+// Bundled assets use fixed filenames + immutable caching, so a docsify upgrade
+// (same filename, new content) would otherwise be masked by browser cache.
+// Stamp each asset URL in index.html with the server bundle hash; when the
+// bundle changes, the hash changes, the short-cached index.html re-propagates,
+// and browsers refetch the assets under their new ?v= URL.
+function versionIndexHtml(html, version) {
+  return html.replace(/(href|src)="(assets\/[^"?]+)"/g, function (_m, attr, asset) {
+    return attr + '="' + asset + "?v=" + version + '"';
+  });
 }
 
 // ── Server Deployment ──
@@ -316,8 +344,11 @@ function deployServer() {
 
   return Promise.all(workers)
     .then(function () {
-      // index.html last → atomicity
-      if (indexFile) return uploadFile(indexFile.full, indexFile.key);
+      // index.html last → atomicity. Stamp asset URLs with the bundle hash.
+      if (indexFile) {
+        var html = versionIndexHtml(fs.readFileSync(indexFile.full, "utf-8"), serverDirHash());
+        return putObject(Buffer.from(html, "utf-8"), indexFile.key);
+      }
     })
     .then(function () { return setLifecycleRule(); })
     .then(function () {
