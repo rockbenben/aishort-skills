@@ -83,6 +83,12 @@ The AI returns a link — click to view the rendered document in your browser.
 
 > **Note**: Markdown image references (e.g., `![](image.png)`) are not uploaded — only the `.md` file itself. Use absolute image URLs if your document includes images.
 
+## Security
+
+- **Anything you upload is publicly accessible** at the returned URL — never upload secrets, API keys, PII, or other sensitive content.
+- Your S3 credentials are stored **in plaintext** in `~/.md-web/config.json`. Keep this file private — don't commit it or share it.
+- **Use a dedicated bucket.** Uploads are namespaced under the `md-web/` key prefix and the auto-expiry rule is scoped to it, so the skill only ever expires its own files — a dedicated bucket further guarantees it never touches your other objects or lifecycle rules.
+
 ## File Structure
 
 ```yaml

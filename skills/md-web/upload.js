@@ -272,10 +272,12 @@ function setLifecycleRule() {
       .catch(function () {});
   }
 
-  // Expire objects with prefix "20" (timestamped uploads only, not Docsify server files)
+  // Scope expiry to md-web's own uploads (the "md-web/" key prefix) only — never
+  // the Docsify server files at the bucket root, nor any unrelated objects that
+  // happen to share the bucket.
   var xml = '<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
     '<Rule><ID>md-web-auto-expire</ID>' +
-    '<Filter><Prefix>20</Prefix></Filter>' +
+    '<Filter><Prefix>md-web/</Prefix></Filter>' +
     '<Status>Enabled</Status>' +
     '<Expiration><Days>' + days + '</Days></Expiration>' +
     '</Rule></LifecycleConfiguration>';
@@ -365,6 +367,10 @@ function timestamp() {
     + "-" + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
 }
 
+// All uploaded markdown lives under this key prefix, so the auto-expiry lifecycle
+// rule (and any future cleanup) only ever touches md-web's own files.
+var UPLOAD_PREFIX = "md-web/";
+
 function addTimestamp(key) {
   var ext = path.extname(key);
   var base = key.slice(0, key.length - ext.length);
@@ -380,7 +386,7 @@ if (args.length < 2) {
 }
 
 var localPath = args[0];
-var remoteKey = addTimestamp(args[1]);
+var remoteKey = UPLOAD_PREFIX + addTimestamp(args[1]);
 
 serverDeployed()
   .then(function (deployed) {
@@ -393,10 +399,12 @@ serverDeployed()
     var name = remoteKey.replace(/\.md$/i, "");
     console.log("\n" + CONFIG.public_url + "/index.html#/" + name);
     agent.destroy();
-    process.exit(0);
   })
   .catch(function (e) {
     console.error("UPLOAD_FAILED: " + e.message);
     agent.destroy();
-    process.exit(1);
+    // Set exitCode instead of process.exit() so the URL/error line is flushed
+    // to a piped stdout/stderr before the process exits (process.exit can
+    // truncate async pipe writes on Linux/macOS — the skill captures this output).
+    process.exitCode = 1;
   });
