@@ -1,6 +1,6 @@
 ---
-name: deepl-translate
-version: 1.1.0
+name: deepl-translate-node
+version: 1.1.1
 description: Use DeepL's neural MT API as a fallback when you are NOT confident in your own translation — proper nouns, ambiguous phrasing, domain/legal/medical terminology, idioms, low-resource languages, or any text where a mistranslation carries real cost. Also use when the user explicitly asks to "用 DeepL 翻译" / "translate with DeepL". Calls the DeepL API (Free tier by default; Pro via DEEPL_API_HOST).
 metadata:
   clawdbot:

@@ -10,7 +10,7 @@ Each skill is a self-contained directory under [`skills/`](skills/).
 ```bash
 # ClawHub / OpenClaw — install a single skill by name
 clawhub install md-web
-clawhub install deepl-translate
+clawhub install deepl-translate-node
 
 # skills.sh — add the whole repo (Claude Code, Cursor, and more)
 npx skills add rockbenben/aishort-skills
@@ -36,25 +36,25 @@ clawhub install md-web
 - **Setup:** [English](skills/md-web/README.md) · [中文](skills/md-web/README.zh.md)
 - Zero runtime dependencies; credentials stay local in `~/.md-web/config.json`.
 
-### [deepl-translate](skills/deepl-translate/) — confidence-gated DeepL fallback
+### [deepl-translate-node](skills/deepl-translate-node/) — confidence-gated DeepL fallback
 
 Translate with [DeepL](https://www.deepl.com/) **only when your own translation might be
 wrong and being wrong matters** — proper nouns, legal/medical terms, idioms, low-resource
 languages, anything high-stakes. The value is the trigger logic, not the API call.
 
 ```bash
-clawhub install deepl-translate
+clawhub install deepl-translate-node
 ```
 
 - **Needs:** Node.js 18+ and a `DEEPL_API_KEY` (Free tier works; Pro via `DEEPL_API_HOST`).
-- **Usage & language codes:** [`SKILL.md`](skills/deepl-translate/SKILL.md)
+- **Usage & language codes:** [`SKILL.md`](skills/deepl-translate-node/SKILL.md)
 
 ## Repository layout
 
 ```
 skills/
 ├── md-web/           # Markdown → shareable web page (S3 + Docsify)
-└── deepl-translate/  # Confidence-gated DeepL translation fallback
+└── deepl-translate-node/  # Confidence-gated DeepL translation fallback
 .github/workflows/    # CI: auto-publishes changed skills to ClawHub on push
 ```
 
