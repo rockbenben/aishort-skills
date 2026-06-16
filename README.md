@@ -11,6 +11,7 @@ Each skill is a self-contained directory under [`skills/`](skills/).
 # ClawHub / OpenClaw — install a single skill by name
 clawhub install md-web
 clawhub install deepl-translate-node
+clawhub install nextjs-to-tauri
 
 # skills.sh — add the whole repo (Claude Code, Cursor, and more)
 npx skills add rockbenben/aishort-skills
@@ -49,12 +50,28 @@ clawhub install deepl-translate-node
 - **Needs:** Node.js 18+ and a `DEEPL_API_KEY` (Free tier works; Pro via `DEEPL_API_HOST`).
 - **Usage & language codes:** [`SKILL.md`](skills/deepl-translate-node/SKILL.md)
 
+### [nextjs-to-tauri](skills/nextjs-to-tauri/) — Next.js 16 → Tauri 2 desktop app
+
+Wrap a client-side Next.js 16 (App Router) app in a thin Tauri 2 native shell — ship a
+~3–10 MB desktop/portable `.exe` (vs ~120 MB Electron) with auto-update, system tray,
+single-instance, and window-state, built entirely in GitHub Actions (no local Rust). The
+value is the hard-won gotchas: the `trailingSlash` white-screen on static export, next-intl
+i18n routing, updater signing keys, and cross-platform CI.
+
+```bash
+clawhub install nextjs-to-tauri
+```
+
+- **Needs:** A static-exportable Next.js 16 app; GitHub Actions for the builds.
+- **Reference:** [`SKILL.md`](skills/nextjs-to-tauri/SKILL.md)
+
 ## Repository layout
 
 ```
 skills/
-├── md-web/           # Markdown → shareable web page (S3 + Docsify)
-└── deepl-translate-node/  # Confidence-gated DeepL translation fallback
+├── md-web/                # Markdown → shareable web page (S3 + Docsify)
+├── deepl-translate-node/  # Confidence-gated DeepL translation fallback
+└── nextjs-to-tauri/       # Next.js 16 → Tauri 2 desktop app migration
 .github/workflows/    # CI: auto-publishes changed skills to ClawHub on push
 ```
 
