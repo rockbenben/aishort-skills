@@ -12,6 +12,7 @@ Each skill is a self-contained directory under [`skills/`](skills/).
 clawhub install md-web
 clawhub install deepl-translate-node
 clawhub install nextjs-to-tauri
+clawhub install nextjs-to-electron
 
 # skills.sh — add the whole repo (Claude Code, Cursor, and more)
 npx skills add rockbenben/aishort-skills
@@ -65,13 +66,31 @@ clawhub install nextjs-to-tauri
 - **Needs:** A static-exportable Next.js 16 app; GitHub Actions for the builds.
 - **Reference:** [`SKILL.md`](skills/nextjs-to-tauri/SKILL.md)
 
+### [nextjs-to-electron](skills/nextjs-to-electron/) — Next.js → Electron desktop app
+
+Wrap a client-side Next.js (App Router) static export in a thin Electron shell — for
+**fully-offline / intranet** Windows machines that lack the WebView2 runtime, where Tauri
+won't launch. Electron ships its own Chromium (~150 MB), so it just runs. `src/` stays
+untouched; all desktop behavior (language persistence, window-state, single-instance, system
+tray) lives in a passively-wired `electron/` main-process layer. The value is the gotchas:
+the `file://` white-screen trap, the custom `app://` protocol, next-intl static-export i18n,
+and electron-builder packaging.
+
+```bash
+clawhub install nextjs-to-electron
+```
+
+- **Needs:** A static-exportable Next.js app; GitHub Actions for the Windows builds.
+- **Reference:** [`SKILL.md`](skills/nextjs-to-electron/SKILL.md)
+
 ## Repository layout
 
 ```
 skills/
 ├── md-web/                # Markdown → shareable web page (S3 + Docsify)
 ├── deepl-translate-node/  # Confidence-gated DeepL translation fallback
-└── nextjs-to-tauri/       # Next.js 16 → Tauri 2 desktop app migration
+├── nextjs-to-tauri/       # Next.js 16 → Tauri 2 desktop app migration
+└── nextjs-to-electron/    # Next.js → Electron desktop app (offline / no-WebView2)
 .github/workflows/    # CI: auto-publishes changed skills to ClawHub on push
 ```
 
