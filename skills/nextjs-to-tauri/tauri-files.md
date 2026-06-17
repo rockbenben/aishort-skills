@@ -110,6 +110,26 @@ fn focus_main_window(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // WebKitGTK's DMABUF renderer crashes with EGL_BAD_ALLOC on many Linux GPU/
+    // driver combos (Xfce, VMs, hybrid graphics, NVIDIA). Force the non-DMABUF
+    // renderer BEFORE any GTK/WebView init — but only if the user hasn't set it,
+    // to respect their/the distro's preference. (gotcha #12)
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
+    // Stage-2 fallback (gotcha #12): on some setups (e.g. Manjaro Xfce) DMABUF-off
+    // still leaves a BLANK window — WebKit's GL compositing context can't init
+    // either (same EGL_BAD_ALLOC, but no core dump; window opens empty). Forcing
+    // software rendering fixes it, at the cost of janky animations / transform /
+    // filter / backdrop-filter. Confirm with both vars set inline before enabling;
+    // enable by default only for non-animation-heavy tools.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+    }
+
     let mut builder = tauri::Builder::default();
 
     #[cfg(desktop)]
