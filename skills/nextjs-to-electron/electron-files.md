@@ -518,7 +518,7 @@ out/
 
 ## CI
 
-### .github/workflows/electron.yml (on the desktop branch — full)
+### .github/workflows/electron.yml (full — host on `main`; add `ref:` to checkout if the code is on a side branch, see below)
 ```yaml
 name: Build Electron (Windows unpacked)
 on:
@@ -531,8 +531,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: lts/* # track current LTS; electron@42+ needs node >= 22.12
           cache: yarn
@@ -540,7 +540,7 @@ jobs:
       - run: yarn test:electron
       - run: yarn electron:build
       - name: Upload unpacked artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: TextDiff-unpacked
           path: dist-electron/win-unpacked     # GitHub auto-zips a folder artifact
@@ -556,25 +556,27 @@ jobs:
           files: dist-electron/*.zip
 ```
 
-### Manual-trigger button when the code lives on a side branch
-`workflow_dispatch` only renders on the **default branch**. Put a dispatch-only copy on `main` that pins the checkout to the desktop branch, so clicking "Run workflow" on main builds that branch's code. Keep it as a SEPARATE file alongside any existing desktop/Tauri workflow — don't overwrite that.
+### Hosting the workflow when the code lives on a side branch
+The "Run workflow" button only renders for workflows on the **default branch**, and a tag push only runs workflows present in the *tagged commit's tree*. So when the app code lives on a side branch, host the workflow **on `main`** and pin its checkout to that branch with `ref:` — one file then serves both the manual button and tag releases, and you keep **no** copy on the side branch (it would never run for a tag and would only drift). Keep it as a SEPARATE file alongside any existing desktop/Tauri workflow — don't overwrite that.
 ```yaml
 name: Build Electron (Windows unpacked)
 on:
-  workflow_dispatch:           # manual only; no tag trigger (avoids clashing with main's release tags)
+  workflow_dispatch:        # manual "Run workflow" button (renders on the default branch)
+  push:
+    tags: ["v*"]            # also build on tag (add the release steps from the full template above); pinned ref below builds the side branch
 jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: feat/electron-desktop   # <-- pin to the branch that has electron/. Update if it merges/renames.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with: { node-version: lts/*, cache: yarn } # electron@42+ needs node >= 22.12
       - run: yarn install --frozen-lockfile
       - run: yarn test:electron
       - run: yarn electron:build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: TextDiff-unpacked
           path: dist-electron/win-unpacked
@@ -586,6 +588,7 @@ Only needed when the **same repo also ships another desktop app** (e.g. Tauri on
 
 Key constraint: on a tag push, GitHub runs only the workflows present in the *tagged commit's tree*. A workflow living on a side branch will **not** run for a tag on `main`. So make `main` the release hub:
 
-- Put both workflows on `main`, each pinning checkout to its own feature branch (`ref: feat/electron-desktop`, `ref: feat/tauri-desktop`). Remove the `push: tags` trigger from the side-branch copies so a stray tag there can't double-release.
+- Keep both workflows **only on `main`**, each pinning checkout to its own feature branch (`ref: feat/electron-desktop`, `ref: feat/tauri-desktop`). Do **not** leave workflow copies on the feature branches — they never run for a tag (only the tagged `main` commit's tree does), they silently drift, and they mislead. Both the tag trigger *and* the manual "Run workflow" button work from `main`, and the pinned `ref` builds the branch code either way, so the side-branch copy buys nothing.
 - Let the Tauri workflow be the one that **creates the (draft) Release**; the Electron one triggers on `workflow_dispatch + push: tags`, builds, then **polls until that Release exists** (`gh release view "$TAG"` in a retry loop — Tauri compiles Rust and is much slower) and uploads the `win-unpacked` zip with `gh release upload "$TAG" … --clobber`.
-- Tag **only on `main`**. The tag is just a trigger — the build uses each feature branch's current HEAD, not a tag snapshot — so push the feature branches first, and keep every `package.json` version in sync with the tag (Electron uploads to `github.ref_name`; a mismatch means it uploads to a Release that doesn't exist).
+- **Make the git tag the single source of truth for the version** — on tag push, inject it before build in *both* workflows (`npm pkg set version="${GITHUB_REF_NAME#v}"`, guarded `if: github.event_name == 'push'`; the Tauri side then runs `update-version` to propagate it into `tauri.conf.json`). This makes the Tauri Release name (derived from the app version), the installer/zip names, and the tag all agree automatically. Without it, Electron uploads to `github.ref_name` while Tauri may name the Release from a stale `package.json` — so Electron polls a Release that never appears and times out, leaving an empty release.
+- Tag **only on `main`, on a commit whose tree already contains the corrected workflows** — a tag-triggered run uses the workflow from the *tagged commit*, not `main`'s tip, so fix-then-tag or the old definition runs (a stale tag can even skip the Electron build entirely if its `electron.yml` predates the `push: tags` trigger). The build uses each feature branch's current HEAD, so push the feature branches first. To rescue a broken/empty release, re-tag: `gh release delete vX --yes; git push origin :refs/tags/vX; git tag vX <fixed-commit>; git push origin vX`.
