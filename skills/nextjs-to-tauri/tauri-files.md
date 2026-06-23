@@ -108,26 +108,72 @@ fn focus_main_window(app: &tauri::AppHandle) {
     }
 }
 
+// Layer-B fix (gotcha #12): AppImages prepend their own libwayland-*.so to the
+// loader path. On rolling distros (Manjaro/Arch/CachyOS) the host's newer
+// Mesa/libEGL is loaded but forced to use the bundled (older) libwayland symbols
+// — an ABI mismatch that aborts at EGL display init (EGL_BAD_ALLOC) BELOW WebKit,
+// where no WEBKIT_* var can reach. Re-exec once with the host libwayland-client
+// in LD_PRELOAD so the loader overrides the stale bundled copy. AppImage-only;
+// .deb/.rpm already use system libs. (yaak / tolaria do the same.)
+#[cfg(target_os = "linux")]
+fn ensure_system_libwayland() {
+    use std::os::unix::process::CommandExt;
+    use std::path::Path;
+
+    if std::env::var_os("APPIMAGE").is_none() {
+        return; // only inside an AppImage
+    }
+    if std::env::var_os("APP_LIBWAYLAND_REEXEC").is_some() {
+        return; // already re-exec'd — avoid an infinite loop
+    }
+
+    const CANDIDATES: &[&str] = &[
+        "/usr/lib/x86_64-linux-gnu/libwayland-client.so.0",
+        "/usr/lib64/libwayland-client.so.0",
+        "/usr/lib/libwayland-client.so.0",
+        "/lib/x86_64-linux-gnu/libwayland-client.so.0",
+    ];
+    let Some(sys_lib) = CANDIDATES.iter().copied().find(|p| Path::new(p).exists()) else {
+        return; // no host libwayland to preload; run as-is
+    };
+
+    let preload = match std::env::var_os("LD_PRELOAD") {
+        Some(existing) if !existing.is_empty() => {
+            format!("{}:{}", sys_lib, existing.to_string_lossy())
+        }
+        _ => sys_lib.to_string(),
+    };
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    // exec() replaces the process on success; only returns on failure.
+    let err = std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .env("LD_PRELOAD", preload)
+        .env("APP_LIBWAYLAND_REEXEC", "1")
+        .exec();
+    eprintln!("libwayland re-exec failed: {err}");
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Must run before any GTK/WebView init so LD_PRELOAD is in place post-re-exec.
+    #[cfg(target_os = "linux")]
+    ensure_system_libwayland();
+
     // WebKitGTK's DMABUF renderer crashes with EGL_BAD_ALLOC on many Linux GPU/
-    // driver combos (Xfce, VMs, hybrid graphics, NVIDIA). Force the non-DMABUF
-    // renderer BEFORE any GTK/WebView init — but only if the user hasn't set it,
-    // to respect their/the distro's preference. (gotcha #12)
+    // driver combos (VMs, hybrid graphics, NVIDIA). Force the non-DMABUF renderer
+    // BEFORE any GTK/WebView init — only if the user hasn't set it, to respect
+    // their/the distro's preference. GPU-buffer SHARING only — still accelerated,
+    // near-zero cost. (gotcha #12, layer A)
+    //
+    // Do NOT also default WEBKIT_DISABLE_COMPOSITING_MODE=1 to chase a *persisting*
+    // EGL line — that's the layer-B libwayland clash (handled above), and forcing
+    // software rendering there only degrades the UI without fixing it.
     #[cfg(target_os = "linux")]
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-    }
-
-    // Stage-2 fallback (gotcha #12): on some setups (e.g. Manjaro Xfce) DMABUF-off
-    // still leaves a BLANK window — WebKit's GL compositing context can't init
-    // either (same EGL_BAD_ALLOC, but no core dump; window opens empty). Forcing
-    // software rendering fixes it, at the cost of janky animations / transform /
-    // filter / backdrop-filter. Confirm with both vars set inline before enabling;
-    // enable by default only for non-animation-heavy tools.
-    #[cfg(target_os = "linux")]
-    if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
     }
 
     let mut builder = tauri::Builder::default();
