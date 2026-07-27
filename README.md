@@ -11,6 +11,7 @@ Each skill is a self-contained directory under [`skills/`](skills/).
 # ClawHub / OpenClaw — install a single skill by name
 clawhub install md-web
 clawhub install deepl-translate-node
+clawhub install html-shot
 clawhub install nextjs-to-tauri
 clawhub install nextjs-to-electron
 
@@ -51,6 +52,23 @@ clawhub install deepl-translate-node
 - **Needs:** Node.js 18+ and a `DEEPL_API_KEY` (Free tier works; Pro via `DEEPL_API_HOST`).
 - **Usage & language codes:** [`SKILL.md`](skills/deepl-translate-node/SKILL.md)
 
+### [html-shot](skills/html-shot/) — HTML → pixel-perfect image
+
+Shoot a still of any HTML file or URL: og:images and social cards, a design exported as a
+PNG, a full-page screenshot. Headless Chromium (Playwright) means **full CSS fidelity and
+CJK/emoji straight from system fonts** — no font bundling, no CSS subset, no third-party
+rendering service. Local files are served over a throwaway `127.0.0.1` server, so fonts,
+images, `@import` and `srcset` all resolve exactly as they would on the real site — a card
+renders fine with the project's dev server down. The output size is read from `body`, so you
+resize the card by editing the CSS, not the command.
+
+```bash
+clawhub install html-shot
+```
+
+- **Needs:** Node.js ≥ 20.9 on glibc Linux, macOS, or Windows (no Alpine/musl). First install pulls ~50 MB of deps plus a ~150 MB Chromium.
+- **Reference:** [`SKILL.md`](skills/html-shot/SKILL.md) · starter card: [`template.example.html`](skills/html-shot/template.example.html)
+
 ### [nextjs-to-tauri](skills/nextjs-to-tauri/) — Next.js 16 → Tauri 2 desktop app
 
 Wrap a client-side Next.js 16 (App Router) app in a thin Tauri 2 native shell — ship a
@@ -89,6 +107,7 @@ clawhub install nextjs-to-electron
 skills/
 ├── md-web/                # Markdown → shareable web page (S3 + Docsify)
 ├── deepl-translate-node/  # Confidence-gated DeepL translation fallback
+├── html-shot/             # HTML/URL → og:image, social card, screenshot (Playwright)
 ├── nextjs-to-tauri/       # Next.js 16 → Tauri 2 desktop app migration
 └── nextjs-to-electron/    # Next.js → Electron desktop app (offline / no-WebView2)
 .github/workflows/    # CI: auto-publishes changed skills to ClawHub on push

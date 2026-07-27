@@ -1,0 +1,52 @@
+<!doctype html>
+<!--
+  html-shot starter template: a 1200x630 social card. System fonts only, so it renders
+  out of the box with no /fonts directory.
+
+  Copy this to your own og.html, edit the copy, then:
+    node {SKILL_DIR}/render.mjs og.html og.png
+  ({SKILL_DIR} = this skill's install directory, ~/.claude/skills/html-shot by default.)
+
+  To use a custom font, set body font-family to "MyFont" and add:
+    @font-face { font-family:"MyFont"; src:url("/fonts/xxx.woff2") format("woff2"); }
+  Put the font file in the project's public/fonts/ (site-absolute /fonts/... resolves
+  there), or next to this file and reference it relatively.
+
+  SET lang= BELOW TO YOUR CONTENT'S LANGUAGE. It is not just markup: when the font stack
+  does not pin a CJK family, it decides which one the browser falls back to, and 骨 / 直 /
+  今 are drawn differently for zh-CN, zh-TW, ja and ko. Leaving it off makes the output
+  depend on the locale of whatever machine renders the card.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  * { margin: 0; box-sizing: border-box; }
+  body {
+    /* position:relative so .foot below anchors to the card, not the viewport —
+       without it the footer drifts off any card shorter than the viewport. */
+    position: relative;
+    width: 1200px; height: 630px; overflow: hidden;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: 0 92px; gap: 26px;
+    background: #0f1115; color: #f4f4f2;
+    /* Covers Windows / macOS / Linux — the CJK family differs on each. */
+    font-family: system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei",
+                 "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .eyebrow { font-size: 24px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: #8b93a1; }
+  h1 { font-size: 76px; line-height: 1.08; font-weight: 800; letter-spacing: -0.02em; max-width: 900px; }
+  h1 .hl { color: #ff5a3c; }
+  .sub { font-size: 26px; color: #aab2c0; max-width: 760px; line-height: 1.5; }
+  .foot { position: absolute; left: 92px; bottom: 54px; font-size: 22px; color: #6b7280; }
+</style>
+</head>
+<body>
+  <div class="eyebrow">Your Project</div>
+  <h1>Your headline here, <span class="hl">the point</span> in accent.</h1>
+  <div class="sub">One line: what it is, who it is for, what it solves.
+    No font to bundle — 中文与 emoji 直接渲染 ✨</div>
+  <div class="foot">yoursite.com</div>
+</body>
+</html>
