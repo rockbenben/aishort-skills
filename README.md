@@ -52,22 +52,30 @@ clawhub install deepl-translate-node
 - **Needs:** Node.js 18+ and a `DEEPL_API_KEY` (Free tier works; Pro via `DEEPL_API_HOST`).
 - **Usage & language codes:** [`SKILL.md`](skills/deepl-translate-node/SKILL.md)
 
-### [html-shot](skills/html-shot/) — HTML → pixel-perfect image
+### [html-shot](skills/html-shot/) — a design in, the image assets out
 
-Shoot a still of any HTML file or URL: og:images and social cards, a design exported as a
-PNG, a full-page screenshot. Headless Chromium (Playwright) means **full CSS fidelity and
-CJK/emoji straight from system fonts** — no font bundling, no CSS subset, no third-party
-rendering service. Local files are served over a throwaway `127.0.0.1` server, so fonts,
-images, `@import` and `srcset` all resolve exactly as they would on the real site — a card
-renders fine with the project's dev server down. The output size is read from `body`, so you
-resize the card by editing the CSS, not the command.
+Turn an HTML file, a URL or an SVG into a still image: og:images and social cards, app icons
+and logo masters, a design exported as a PNG, a full-page screenshot. Headless Chromium
+(Playwright) means **full CSS fidelity and CJK/emoji straight from system fonts** — no font
+bundling, no CSS subset, no third-party rendering service. Local files are served over a
+throwaway `127.0.0.1` server, so fonts, images, `@import` and `srcset` all resolve exactly as
+they would on the real site — a card renders fine with the project's dev server down. The
+output size is read from `body`, so you resize the card by editing the CSS, not the command,
+and `--palette` cuts a flat card to a third of its bytes on the way out. A second entry
+point, `icons.mjs`, turns one source into a favicon or app-icon set
+(`.ico`/`.icns`/apple-touch/PWA) under the filenames Docusaurus, Next, Electron or Tauri each
+expect — as many or as few as the target needs, from one `favicon.ico` for a docs page to the
+full five for an installable PWA. It will not fake one either: a non-square source is
+rejected, and an image larger than the source has to give is clamped and said so, rather than
+letterboxed or upscaled behind a ✔.
 
 ```bash
 clawhub install html-shot
 ```
 
 - **Needs:** Node.js ≥ 20.9 on glibc Linux, macOS, or Windows (no Alpine/musl). First install pulls ~50 MB of deps plus a ~150 MB Chromium.
-- **Reference:** [`SKILL.md`](skills/html-shot/SKILL.md) · starter card: [`template.example.html`](skills/html-shot/template.example.html)
+- **Setup:** [English](skills/html-shot/README.md) · [中文](skills/html-shot/README.zh.md)
+- **Reference:** [`SKILL.md`](skills/html-shot/SKILL.md) · starters: [`template.example.html`](skills/html-shot/template.example.html) (og card) · [`icon.example.html`](skills/html-shot/icon.example.html) (transparent icon / mark)
 
 ### [nextjs-to-tauri](skills/nextjs-to-tauri/) — Next.js 16 → Tauri 2 desktop app
 
@@ -107,9 +115,10 @@ clawhub install nextjs-to-electron
 skills/
 ├── md-web/                # Markdown → shareable web page (S3 + Docsify)
 ├── deepl-translate-node/  # Confidence-gated DeepL translation fallback
-├── html-shot/             # HTML/URL → og:image, social card, screenshot (Playwright)
+├── html-shot/             # HTML/SVG/URL → og:image, social card, screenshot, favicon/app-icon set
 ├── nextjs-to-tauri/       # Next.js 16 → Tauri 2 desktop app migration
 └── nextjs-to-electron/    # Next.js → Electron desktop app (offline / no-WebView2)
+assets/               # README images — kept out of skills/ so they aren't installed
 .github/workflows/    # CI: auto-publishes changed skills to ClawHub on push
 ```
 

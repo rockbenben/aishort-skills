@@ -1,0 +1,79 @@
+<!doctype html>
+<!--
+  html-shot starter template: a transparent, square mark — an app icon, a favicon master, a
+  badge. The counterpart to template.example.html, which is an opaque 1200x630 card.
+
+  It feeds both entry points. Copy it to your own icon.html, edit the copy, then either
+
+    node {SKILL_DIR}/render.mjs icon.html icon.png --width 1024 --height 1024 --transparent
+    node {SKILL_DIR}/icons.mjs  icon.html public --preset web --bg "#1b3fd8"
+
+  ({SKILL_DIR} = this skill's install directory, ~/.claude/skills/html-shot by default.)
+
+  WHY EVERY SIZE BELOW IS IN vmin, NOT px: an icon has no one size. icons.mjs renders the
+  master at 1024, you may want 512 or 180 elsewhere, and a body pinned to `width:320px`
+  would draw a 320 px mark in the corner of whatever larger frame it is given — the shape
+  would not fill the icon. `100vmin` makes body a square that fills the frame it is handed,
+  and vmin-based type and radii scale with it. Sizes are given as a share of the icon:
+  41.25vmin means "41.25% of the icon's side".
+
+  Without --width/--height you get a square at the viewport's shorter side (630). Pass the
+  size you want; 1024 is the usual master.
+
+  TRANSPARENCY TAKES THREE THINGS, and missing any one fails silently:
+    1. CSS — html AND body must be `background: transparent`. Any opaque colour on either
+       (even #fff or a page-grey) fills the area outside the border-radius with that colour.
+    2. THE SHAPE GOES ON A CHILD, NEVER ON body. A background set on body is propagated to
+       the root canvas, and the canvas is not clipped by body's border-radius — put the
+       radius + fill on body and the corners come back opaque no matter what else you do.
+       That is why the mark below is a .icon div and body is only a transparent box.
+    3. The flag — `--transparent`. It only removes the *browser's* default white; it cannot
+       override a background the page paints itself.
+
+  YOU CANNOT CHECK THIS BY EYE: every image viewer paints transparent pixels white, so a
+  mark that kept its background looks identical to one that dropped it. Ask the file:
+
+    node -e "require('{SKILL_DIR}/node_modules/sharp')('icon.png').stats().then(s=>console.log(s.isOpaque?'NO alpha':'transparent'))"
+
+  One thing transparency does NOT survive: apple-touch-icon. iOS composites alpha onto black,
+  so that one file must be flattened — icons.mjs does it for you, onto --bg.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  /* Both of these. Removing either one is the #1 way this comes out opaque. */
+  html, body { background: transparent; }
+
+  * { margin: 0; box-sizing: border-box; }
+  body {
+    /* A square that fills whatever frame the renderer is given, and carries NO background
+       of its own — see note 2 above. */
+    width: 100vmin; height: 100vmin;
+    /* Covers Windows / macOS / Linux — the CJK family differs on each. */
+    font-family: system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei",
+                 "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .icon {
+    width: 100%; height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 3.125vmin;
+    /* The shape. Everything outside this radius stays transparent.
+       22.5% is close to the squircle iOS masks app icons with, so a mark drawn at this
+       radius lines up with the corners iOS draws for the apple-touch-icon. */
+    border-radius: 22.5vmin;
+    background: linear-gradient(140deg, #2f6df6 0%, #1b3fd8 60%, #5b2fe0 100%);
+    color: #fff;
+  }
+  .glyph { font-size: 41.25vmin; font-weight: 800; line-height: 1; letter-spacing: -0.04em; }
+  .word { font-size: 8.125vmin; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; opacity: 0.86; }
+</style>
+</head>
+<body>
+  <div class="icon">
+    <div class="glyph">书</div>
+    <div class="word">Icon</div>
+  </div>
+</body>
+</html>

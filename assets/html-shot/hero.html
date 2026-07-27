@@ -1,0 +1,38 @@
+<!doctype html>
+<!--
+  README hero card for the html-shot skill. Source of truth — regenerate with:
+
+    node skills/html-shot/render.mjs assets/html-shot/hero.html assets/html-shot/hero.png
+
+  (run from the repo root). System fonts only, so it renders with no /fonts directory.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  * { margin: 0; box-sizing: border-box; }
+  body {
+    position: relative;
+    width: 1200px; height: 630px; overflow: hidden;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: 0 92px; gap: 26px;
+    background: #0f1115; color: #f4f4f2;
+    font-family: system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei",
+                 "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .eyebrow { font-size: 24px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: #8b93a1; }
+  h1 { font-size: 76px; line-height: 1.08; font-weight: 800; letter-spacing: -0.02em; max-width: 940px; }
+  h1 .hl { color: #ff5a3c; }
+  .sub { font-size: 26px; color: #aab2c0; max-width: 800px; line-height: 1.5; }
+  .foot { position: absolute; left: 92px; bottom: 54px; font-size: 22px; color: #6b7280; }
+</style>
+</head>
+<body>
+  <div class="eyebrow">Agent Skill</div>
+  <h1>Any HTML, shot as a <span class="hl">pixel-perfect</span> image.</h1>
+  <div class="sub">og:images, social cards, screenshots — headless Chromium, full CSS fidelity.
+    <span lang="zh-CN">中文与 emoji 直接走系统字体，无需打包 ✨</span></div>
+  <div class="foot">github.com/rockbenben/aishort-skills · skills/html-shot</div>
+</body>
+</html>

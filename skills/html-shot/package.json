@@ -1,15 +1,16 @@
 {
   "name": "html-shot-skill",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
-  "description": "html-shot skill engine: render HTML/URL to PNG/JPEG/WebP via Playwright + sharp",
+  "description": "html-shot skill engine: render HTML/SVG/URL to PNG/JPEG/WebP via Playwright + sharp",
   "license": "MIT",
   "engines": {
     "node": ">=20.9.0"
   },
   "dependencies": {
     "playwright": "^1.62.0",
+    "png2icons": "^2.0.1",
     "sharp": "^0.35.3"
   }
 }

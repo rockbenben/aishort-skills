@@ -4,6 +4,11 @@
  * Engine = Playwright (headless Chromium): full CSS fidelity, CJK/emoji straight from
  * system fonts, nothing to bundle.
  *
+ * An .svg input is rendered too: it is wrapped in a minimal HTML page (margin:0, the svg
+ * pinned to the viewport) and sized from its own width/height or viewBox. Chromium rather
+ * than sharp's SVG rasteriser is the point — filters such as feTurbulence/feDisplacementMap
+ * come out visibly different in the two engines.
+ *
  * A local HTML file (a path, or a file:// URL) is served over a throwaway 127.0.0.1 HTTP
  * server rather than pasted into the page, so Chromium resolves every reference itself —
  * relative paths, "/xxx" site-absolute paths, @import, srcset, fonts named inside a
@@ -29,7 +34,7 @@
  * non-zero; the image is still written, for inspection.
  *
  * Usage:
- *   node render.mjs <input.html|url> <output.(png|jpg|webp)> [options]
+ *   node render.mjs <input.html|input.svg|url> <output.(png|jpg|webp)> [options]
  * Options:
  *   --width  N     viewport width in CSS px; in the default mode it also fixes the output
  *                  width (integer; default: measured from body)
@@ -39,6 +44,15 @@
  *   --format F     png | jpeg (alias jpg) | webp (default: inferred from the output
  *                  extension, which must then be one of those)
  *   --quality N    jpeg/webp quality, integer 1-100 (default 90; png ignores it)
+ *   --palette      quantise the png to a 256-colour palette (flat artwork: same to the eye,
+ *                  a fraction of the bytes). png only
+ *   --colors N     palette size: 2 | 4 | 16 | 256 (implies --palette). A palette png is a
+ *                  bit depth, so those four are the only sizes the format can store
+ *   --style CSS    extra CSS injected after load, before measuring — strip a preview
+ *                  sheet's own framing when shooting one element out of it with --selector
+ *   --channel C    launch an installed browser instead of the bundled Chromium:
+ *                  chrome | msedge (+ -beta/-dev). Skips the browser download, but the
+ *                  output then depends on whatever version is installed
  *   --transparent  transparent background (png/webp keep alpha; jpeg has none, so it is
  *                  flattened onto white. The page itself must not paint an opaque background)
  *   --scheme S     emulate a color scheme, dark | light (for prefers-color-scheme cards)
@@ -55,9 +69,13 @@
  *   node render.mjs badge.html badge.png --transparent
  *   node render.mjs card.html og-dark.png --scheme dark
  *   node render.mjs https://example.com shot.png --full
+ *   node render.mjs card.html og.png --palette             # flat artwork, a third the bytes
+ *   node render.mjs logo.svg logo.png --width 1024 --transparent
+ *   node render.mjs sheet.html mark.png --selector "#mark1" --transparent \
+ *     --style "body,.cell{background:transparent!important;padding:0!important}"
  */
 import { createServer } from "node:http";
-import { createReadStream, existsSync, statSync, realpathSync } from "node:fs";
+import { createReadStream, existsSync, statSync, realpathSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { dirname, resolve, extname, basename, sep, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -87,7 +105,7 @@ try {
 
 function fail(msg) {
   console.error(`html-shot: ${msg}`);
-  console.error('usage: node render.mjs <input.html|url> <output.(png|jpg|webp)> [--width N --height N --dpr N --scale N --format png|jpeg|webp --quality N --transparent --scheme dark|light --base DIR --wait MS --selector S --full]');
+  console.error('usage: node render.mjs <input.html|input.svg|url> <output.(png|jpg|webp)> [--width N --height N --dpr N --scale N --format png|jpeg|webp --quality N --palette --colors 2|4|16|256 --transparent --scheme dark|light --base DIR --wait MS --selector S --full --style CSS --channel chrome|msedge]');
   process.exit(1);
 }
 const warn = (msg) => console.error(`html-shot: note — ${msg}`);
@@ -96,8 +114,8 @@ const [inputArg, output, ...rest] = process.argv.slice(2);
 if (!inputArg || !output) fail("missing <input> or <output>");
 
 // Parse options: unknown flags and missing values are errors, never silently swallowed.
-const VALUE_FLAGS = new Set(["width", "height", "dpr", "scale", "format", "quality", "scheme", "base", "wait", "selector"]);
-const BOOL_FLAGS = new Set(["transparent", "full"]);
+const VALUE_FLAGS = new Set(["width", "height", "dpr", "scale", "format", "quality", "scheme", "base", "wait", "selector", "colors", "channel", "style"]);
+const BOOL_FLAGS = new Set(["transparent", "full", "palette"]);
 const opts = {};
 for (let i = 0; i < rest.length; i++) {
   if (!rest[i].startsWith("--")) fail(`unexpected argument "${rest[i]}"`);
@@ -136,6 +154,29 @@ const transparent = !!opts.transparent;
 const selector = opts.selector ?? null;
 const full = !!opts.full;
 
+// Palette quantisation. Flat artwork (cards, marks, diagrams) is visually identical at 256
+// colours and a fraction of the size; dithering is off because on flat fills it only adds
+// noise for the PNG compressor to carry.
+// A palette png stores an index per pixel, so the palette size IS the bit depth: 1, 2, 4 or
+// 8 bits, i.e. 2, 4, 16 or 256 entries. sharp accepts any number and quietly rounds it to one
+// of those — ask for 64 and you get 16 — so anything else is refused here rather than
+// silently delivering a quarter of what was asked for.
+const PALETTE_STEPS = [2, 4, 16, 256];
+const colors = int("colors", null, 2);
+if (colors !== null && !PALETTE_STEPS.includes(colors))
+  fail(`--colors accepts ${PALETTE_STEPS.join(" | ")} — a png palette is a bit depth (1/2/4/8 bits), so those are the only sizes the format can store; got "${opts.colors}"`);
+const palette = !!opts.palette || colors !== null;
+
+// A browser already on the machine, instead of Playwright's bundled Chromium.
+// CSS injected after load, before anything is measured. Lets one preview sheet act as the
+// source for several assets: shoot each element with --selector and strip the sheet's own
+// framing (padding, backgrounds) so the asset comes out clean.
+const style = opts.style ?? null;
+
+const CHANNELS = ["chrome", "chrome-beta", "chrome-dev", "msedge", "msedge-beta", "msedge-dev"];
+const channel = opts.channel ?? null;
+if (channel && !CHANNELS.includes(channel)) fail(`--channel accepts ${CHANNELS.join(" | ")}, got "${channel}"`);
+
 // A file:// URL is a local file: it must go through the same server, containment check,
 // charset and missing-asset accounting as a plain path, not be treated as a remote page.
 let input = inputArg;
@@ -146,6 +187,12 @@ if (/^file:\/\//i.test(input)) {
 if (!isUrl) {
   if (!existsSync(resolve(input))) fail(`input file not found: ${input}`);
   if (statSync(resolve(input)).isDirectory()) fail(`input is a directory, expected an HTML file: ${input}`);
+  // Anything that is not an SVG is served as text/html, so handing over a JPEG renders its
+  // bytes as a page of mojibake and reports success. It is already an image; say so.
+  const RASTER_IN = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".tif", ".tiff", ".bmp", ".ico"];
+  const ext = extname(resolve(input)).toLowerCase();
+  if (RASTER_IN.includes(ext))
+    fail(`${basename(input)} is already a raster image — this renders HTML/SVG, and a ${ext.slice(1)} handed to it would be served as HTML and come out as mojibake. Convert it first (sharp reads png/jpeg/webp/gif/avif/tiff — not bmp or ico), or reference it from an HTML file and shoot that.`);
 }
 if (opts.base && !isUrl) {
   const b = resolve(opts.base);
@@ -154,6 +201,90 @@ if (opts.base && !isUrl) {
 }
 const outDir = dirname(resolve(output));
 if (!existsSync(outDir)) fail(`output directory does not exist: ${outDir}`);
+
+// An .svg input is a document Chromium renders natively, but on its own it would be laid
+// out inside body's default margin and default to a replaced element's 300x150. Wrap it in
+// a minimal page that pins it to the viewport, and take the default size from the file's
+// own width/height (else its viewBox) so an icon comes out at the size it declares.
+function svgRootInfo(src) {
+  const tag = src.match(/<svg\b[^>]*>/i)?.[0] ?? "";
+  // The attribute name must start the attribute, not merely end one: "-" is a word boundary,
+  // so a plain \b would let stroke-width answer a query for width — and a Heroicons-style
+  // root tag would be measured from its stroke.
+  const attr = (n) => tag.match(new RegExp(`(?:^|[\\s"'])${n}\\s*=\\s*["']([^"']+)["']`, "i"))?.[1];
+  const px = (v) => {
+    const m = v?.trim().match(/^([0-9.]+)(px)?$/i); // %, em, vh etc. are not intrinsic
+    const n = m ? Number(m[1]) : NaN;
+    return Number.isFinite(n) && n >= 1 ? Math.round(n) : null;
+  };
+  // "present" and "usable" are two different questions, and the repair below needs both:
+  // a viewBox that exists but does not parse has to be REPLACED, not have a second one
+  // appended next to it. Presence is asked with its own pattern because attr() only returns
+  // NON-EMPTY values — viewBox="" would otherwise read as absent, take the append path, and
+  // have its repair silently dropped by the parser, which keeps the first occurrence.
+  const hasViewBoxAttr = /(?:^|[\s"'])viewBox\s*=\s*["'][^"']*["']/i.test(tag);
+  const vb = attr("viewBox")?.trim().split(/[\s,]+/).map(Number);
+  const hasViewBox = vb?.length === 4 && vb.every(Number.isFinite) && vb[2] >= 1 && vb[3] >= 1;
+  const w = px(attr("width")), h = px(attr("height"));
+  const size = w && h ? { w, h } : hasViewBox ? { w: Math.round(vb[2]), h: Math.round(vb[3]) } : null;
+  return { tag, size, hasViewBox, hasViewBoxAttr };
+}
+let svgBody = null;
+if (!isUrl && extname(resolve(input)).toLowerCase() === ".svg") {
+  let src;
+  try { src = readFileSync(resolve(input), "utf8"); }
+  catch (e) { fail(`could not read ${input}: ${e.message.split("\n")[0]}`); }
+  const { tag, size, hasViewBox, hasViewBoxAttr } = svgRootInfo(src);
+
+  // The wrapper stretches the svg to the frame with width/height:100%, but an SVG with no
+  // viewBox has no user-unit coordinate system to stretch: its contents stay at their
+  // authored size in the top-left corner, and asking for a bigger frame just adds empty
+  // space. When the root declares a size we know the coordinate system it meant, so give it
+  // the viewBox it omitted; when it declares neither, nothing can be inferred — say so
+  // rather than writing a mark stranded in the corner.
+  let markup = src;
+  if (!hasViewBox) {
+    if (size) {
+      let withVB;
+      if (hasViewBoxAttr) {
+        // The attribute is there but unusable (wrong arity, units, a sub-1 extent). Appending
+        // a second viewBox does nothing: the HTML parser keeps the FIRST occurrence, so the
+        // broken one still wins and the render comes out as a magnified sliver of the artwork
+        // — silently, at exit 0. Overwrite the value in place instead.
+        withVB = tag.replace(/((?:^|[\s"'])viewBox\s*=\s*)["'][^"']*["']/i, `$1"0 0 ${size.w} ${size.h}"`);
+        warn(`${basename(input)} has a viewBox that cannot be read; using "0 0 ${size.w} ${size.h}" from its width/height instead. Fix the viewBox on the <svg> root.`);
+      } else {
+        const closed = /\/>$/.test(tag);
+        withVB = tag.replace(/\s*\/?>$/, ` viewBox="0 0 ${size.w} ${size.h}"${closed ? "/>" : ">"}`);
+      }
+      markup = src.replace(tag, () => withVB);
+    } else {
+      warn(`${basename(input)} has ${hasViewBoxAttr ? "no usable viewBox" : "no viewBox"}, so its artwork cannot scale to the frame — it will sit at its authored size in the top-left corner. Add viewBox="0 0 W H" to the <svg> root.`);
+    }
+  }
+
+  svgBody =
+    '<!doctype html><html><head><meta charset="utf-8"><style>' +
+    "html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden}" +
+    "svg{display:block;width:100%;height:100%}</style></head><body>" + markup + "</body></html>";
+
+  if (!size) {
+    // No intrinsic size at all: there is no aspect ratio to complete a single --width from,
+    // so the other axis falls back to the default viewport. Say it in both cases — silently
+    // shipping a 1024×630 icon is the failure this warning exists to prevent. When BOTH axes
+    // were given there is no fallback to report: the output is exactly what was asked for,
+    // and the artwork-cannot-scale warning above already covers what is still wrong.
+    if (!(width && height))
+      warn(`${basename(input)} declares neither width/height nor a usable viewBox, so its size is unknown; ${
+        width || height
+          ? `the axis you did not give falls back to the default (${width ? "height 630" : "width 1200"}) — pass both --width and --height`
+          : "shooting the default 1200×630 viewport — pass --width/--height"}`);
+  } else if (!width && !height) { width = size.w; height = size.h; }
+  // One dimension given: keep the SVG's own aspect ratio rather than stretching it.
+  else if (width && !height) height = Math.max(1, Math.round(width * size.h / size.w));
+  else if (height && !width) width = Math.max(1, Math.round(height * size.w / size.h));
+}
+if (svgBody && selector === null && full) warn("--full on an SVG input is the same as the default; the wrapper is exactly one viewport");
 
 // Render at least as dense as the requested dpr, otherwise the last step upscales (blurry).
 const renderScale = Math.max(scale, dpr);
@@ -172,6 +303,7 @@ if (fmtIn && !["png", "jpeg", "webp"].includes(fmtIn)) fail(`--format accepts pn
 if (!format) fail(`cannot tell the output format from "${output}" — use a .png/.jpg/.webp extension, or pass --format`);
 if (quality > 100) fail(`--quality is an integer 1-100, got "${opts.quality}"`);
 if (opts.quality !== undefined && format === "png") warn("--quality only applies to jpeg/webp; png ignores it");
+if (palette && format !== "png") warn(`--palette/--colors only apply to png; ${format} ignores them (use --quality)`);
 
 // Content types Chromium is picky about (a stylesheet served as octet-stream is ignored in
 // standards mode, a module script is blocked). Images and fonts are sniffed, but being
@@ -227,7 +359,7 @@ function findPublic(startDir) {
 // (injected into Chromium's own requests via route interception); anything else on the
 // machine that finds the port gets 403 — and a refused request is reported, so it can never
 // silently become a hole in the image.
-function serveRoots(roots, indexFile, token) {
+function serveRoots(roots, indexFile, token, indexBody = null) {
   const problems = new Set();
   const report = (key, msg) => {
     if (problems.has(key)) return;
@@ -250,6 +382,12 @@ function serveRoots(roots, indexFile, token) {
     let file = null;
     let type = null;
     if (urlPath === "/") {
+      // indexBody is the generated wrapper for an .svg input; the file's own directory is
+      // still a root, so anything the SVG references keeps resolving.
+      if (indexBody !== null) {
+        res.writeHead(200, { "content-type": MIME[".html"] }).end(indexBody);
+        return;
+      }
       file = indexFile;
       type = MIME[".html"]; // the input is HTML whatever its extension (.htm, none, ...)
     } else {
@@ -305,13 +443,25 @@ const settleAnimations = (page) => page.evaluate(() => {
   }
 }).catch(() => {});
 
-const browser = await chromium.launch().catch((e) => {
-  if (/Executable doesn't exist|Please run the following command/i.test(e.message)) {
-    console.error("html-shot: the Chromium build for this Playwright version is missing.");
-    console.error(`Run once:\n  node "${PW_CLI}" install chromium`);
+const browser = await chromium.launch(channel ? { channel } : {}).catch((e) => {
+  // Playwright words the two cases differently, and neither says the word "channel": a
+  // missing bundled build is "Executable doesn't exist at <path>", a missing --channel is
+  // "Chromium distribution 'msedge-dev' is not found at <path>". Match what it actually
+  // prints — a guard that matches nothing leaves the user with a raw stack.
+  if (/Executable doesn't exist|distribution .* is not found|Please run the following command|playwright install/i.test(e.message)) {
+    if (channel) {
+      console.error(`html-shot: --channel ${channel} was asked for, but that browser is not installed here.`);
+      console.error("Drop --channel to use the bundled Chromium, or install the browser.");
+    } else {
+      console.error("html-shot: the Chromium build for this Playwright version is missing.");
+      console.error(`Run once:\n  node "${PW_CLI}" install chromium`);
+    }
     process.exit(1);
   }
-  throw e;
+  // Anything else is unexpected, but this is still a CLI: one line beats re-throwing into a
+  // top-level await, where it surfaces as an uncaught exception with a Playwright stack.
+  console.error(`html-shot: could not launch the browser: ${e.message.split("\n")[0]}`);
+  process.exit(1);
 });
 let site = null;
 let shot;
@@ -329,7 +479,7 @@ try {
       try { return canonical(r); } catch { return r; }
     });
     const token = randomBytes(16).toString("hex");
-    site = serveRoots(roots, file, token);
+    site = serveRoots(roots, file, token, svgBody);
     target = await site.started.catch((e) => fail(`could not start the local server: ${e.message}`));
     // Stamp this run's token onto Chromium's own requests to our server; anything without
     // it (another local process probing the port) is refused.
@@ -342,6 +492,9 @@ try {
   await page.goto(target, { waitUntil: "load" }).catch((e) => {
     fail(`could not load ${inputArg}${isUrl ? "" : " (served locally)"}\n  ${e.message.split("\n")[0]}`);
   });
+  // Injected before the settle/measure below, so its effect on layout is what gets measured.
+  if (style) await page.addStyleTag({ content: style })
+    .catch((e) => fail(`could not inject --style: ${e.message.split("\n")[0]}`));
   // Best-effort settle: live pages with polling/websockets never reach networkidle, so
   // wait a bounded 10s and capture the loaded page as-is instead of crashing.
   await page.waitForLoadState("networkidle", { timeout: 10_000 })
@@ -430,7 +583,9 @@ if (target.w < 1 || target.h < 1)
 if (target.w !== meta.width || target.h !== meta.height) pipe = pipe.resize(target.w, target.h);
 if (format === "jpeg") pipe = pipe.flatten({ background: "#ffffff" }).jpeg({ quality }); // jpeg has no alpha
 else if (format === "webp") pipe = pipe.webp({ quality });
-else pipe = pipe.png({ compressionLevel: 9 });
+else pipe = pipe.png(palette
+  ? { palette: true, colours: colors ?? 256, dither: 0, compressionLevel: 9 }
+  : { compressionLevel: 9 });
 const info = await pipe.toFile(resolve(output))
   .catch((e) => fail(`could not write ${output}: ${e.message.split("\n")[0]}`));
 
