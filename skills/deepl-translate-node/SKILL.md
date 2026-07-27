@@ -1,6 +1,6 @@
 ---
 name: deepl-translate-node
-version: 1.1.1
+version: 1.1.2
 description: Use DeepL's neural MT API as a fallback when you are NOT confident in your own translation — proper nouns, ambiguous phrasing, domain/legal/medical terminology, idioms, low-resource languages, or any text where a mistranslation carries real cost. Also use when the user explicitly asks to "用 DeepL 翻译" / "translate with DeepL". Calls the DeepL API (Free tier by default; Pro via DEEPL_API_HOST).
 metadata:
   clawdbot:
@@ -111,6 +111,13 @@ node "{SKILL_DIR}/translate.mjs" --source JA --target EN-US --text "持分会社
 The script prints **only the translated text** on success, or an error line
 (prefixed `ERROR:`) on failure. Multiple lines / paragraphs are preserved.
 
+**It always terminates.** The request is capped at 60 seconds, because an endpoint
+that accepts the connection and then never answers — throttled, blackholed, behind a
+captive portal or a stalled proxy — would otherwise leave the call hanging with no
+output and no exit code, waiting to be killed. On expiry it prints an `ERROR:` line
+naming the timeout and exits non-zero like any other failure, so a caller never has
+to impose its own deadline.
+
 ## Workflow inside a task
 
 1. You're translating something and hit a passage you're unsure about.
@@ -131,4 +138,7 @@ extend the script.
 - Free tier: 500,000 chars/month. The script does not track quota; if you get a
   `456` response that means quota exhausted.
 - `403` means a bad/missing key.
+- A timeout message means the host was reachable enough to connect but never
+  replied — treat it as a network/reachability problem, not a bad key or bad input.
+  Retrying immediately usually reproduces it.
 - For DeepL **Pro**, set `DEEPL_API_HOST=api.deepl.com` (default is `api-free.deepl.com`).

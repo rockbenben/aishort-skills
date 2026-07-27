@@ -5,6 +5,8 @@
  * Reads the auth key from the DEEPL_API_KEY environment variable (never hardcode).
  * Prints ONLY the translated text on success; prints a line starting with
  * "ERROR:" and exits non-zero on failure. Newlines / paragraphs are preserved.
+ * Always terminates: the request is capped at 60s, so an endpoint that connects and
+ * then never answers fails loudly instead of hanging the caller forever.
  *
  * Usage:
  *   node translate.mjs --target ZH --text "Hello world"
@@ -54,8 +56,14 @@ async function main() {
       method: "POST",
       headers: { Authorization: "DeepL-Auth-Key " + key, "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      // fetch has no default timeout: a connection that is accepted and then never answered
+      // (a throttled or blackholed endpoint, a captive portal, a stalled proxy) leaves this
+      // hanging forever with no output and no exit — the caller waits until it is killed.
+      signal: AbortSignal.timeout(60_000),
     });
   } catch (e) {
+    if (e.name === "TimeoutError")
+      return fail("DeepL did not respond within 60s. The endpoint may be unreachable or throttled from this network; check connectivity (and DEEPL_API_HOST if you are on Pro).");
     return fail("DeepL request failed: " + e.message);
   }
 
