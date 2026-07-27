@@ -1,0 +1,195 @@
+<!doctype html>
+<!--
+  Repository social card for aishort-skills. Source of truth — regenerate with:
+
+    node skills/html-shot/render.mjs assets/social-card.html assets/social-card.png --palette
+
+  (run from the repo root). System fonts only, so it renders with no /fonts directory.
+
+  The motif is transformation, not inventory. Every skill here takes an artifact you
+  already have and returns one you can ship — a design becomes a PNG, a markdown file
+  becomes a page, a web app becomes a desktop build. That is true of skills not written
+  yet, so the card does not list the roster and does not go stale when it changes:
+  three rows stand as examples, and the dashed slot is the set continuing to grow.
+
+  Colour carries the direction: inputs are drawn in outline, outputs in verdigris.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --vellum:    #e6e8e3;
+    --graphite:  #191d1b;
+    --verdigris: #2a6153;
+    --wash:      #cfdcd6;   /* verdigris at paper strength, for output fills */
+    --rule:      #b9bfb7;
+    --muted:     #5f665d;
+
+    --mono: ui-monospace, "Cascadia Mono", "Cascadia Code", "SF Mono", Menlo, Consolas,
+            "DejaVu Sans Mono", "Liberation Mono", monospace;
+    --serif: Georgia, "Iowan Old Style", "Palatino Linotype", Palatino, "Nimbus Roman",
+             "Liberation Serif", "Songti SC", serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    width: 1200px; height: 630px; overflow: hidden;
+    display: flex; flex-direction: column;
+    padding: 52px 72px 48px;
+    background: var(--vellum);
+    color: var(--graphite);
+    font-family: var(--mono);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding-bottom: 16px; border-bottom: 1px solid var(--rule);
+  }
+  .repo { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+  .repo .slash { color: var(--muted); font-weight: 400; }
+  .head .compat { font-size: 16px; }
+
+  .main { flex: 1; display: flex; align-items: center; gap: 56px; }
+
+  /* ── left: the claim ──────────────────────────────────────── */
+  .say { width: 424px; flex: none; }
+  h1 {
+    font-size: 55px; font-weight: 700; line-height: 1.02;
+    letter-spacing: -0.04em; margin-bottom: 20px;
+  }
+  .sub {
+    font-family: var(--serif); font-size: 21px; line-height: 1.5;
+    color: var(--muted);
+  }
+  .sub b { color: var(--graphite); font-weight: 400; font-style: italic; }
+
+  /* ── footer: the two install routes, on their own baseline ── */
+  .foot {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-top: 20px; border-top: 1px solid var(--rule);
+  }
+  .install {
+    font-size: 18px; font-weight: 600; white-space: nowrap;
+    padding: 9px 15px; border: 1px solid var(--rule); background: #eceee9;
+  }
+  .install .sigil { color: var(--verdigris); }
+  .compat { font-size: 17px; color: var(--muted); white-space: nowrap; }
+
+  /* ── right: the motif ─────────────────────────────────────── */
+  .flow { flex: 1; display: flex; flex-direction: column; gap: 20px; }
+  .step { display: flex; align-items: center; gap: 20px; }
+
+  .g { width: 84px; height: 84px; flex: none; position: relative; border: 2.5px solid var(--graphite); }
+  .g .bars { position: absolute; left: 13px; right: 13px; top: 16px; }
+  .g .bars i { display: block; height: 3px; background: var(--graphite); margin-bottom: 6px; opacity: .5; }
+  .g .bars i:nth-child(2) { width: 76%; }
+  .g .bars i:nth-child(3) { width: 52%; }
+  .g .tag {
+    position: absolute; left: 0; right: 0; bottom: 9px; text-align: center;
+    font-size: 12px; font-weight: 700; letter-spacing: .06em; color: var(--graphite);
+  }
+
+  /* outputs: filled, verdigris — what the skill hands back */
+  .g.out { border-color: var(--verdigris); background: var(--wash); }
+  .g.out .tag { color: var(--verdigris); }
+
+  /* an image: horizon + sun */
+  .g .sun { position: absolute; right: 16px; top: 15px; width: 15px; height: 15px;
+            border-radius: 50%; background: var(--verdigris); }
+  .g .hill { position: absolute; left: 11px; bottom: 26px; width: 0; height: 0;
+             border-left: 21px solid transparent; border-right: 21px solid transparent;
+             border-bottom: 25px solid var(--verdigris); }
+  .g .hill.two { left: 33px; border-left-width: 15px; border-right-width: 15px;
+                 border-bottom-width: 18px; opacity: .55; }
+
+  /* a browser page: title bar with three dots on the left, then content */
+  .g .bar { position: absolute; left: 0; right: 0; top: 0; height: 17px;
+            background: var(--verdigris); }
+  .g .bar u { position: absolute; top: 6px; width: 5px; height: 5px; border-radius: 50%;
+              background: var(--vellum); opacity: .85; }
+  .g .bar u:nth-child(1) { left: 8px; }
+  .g .bar u:nth-child(2) { left: 18px; }
+  .g .bar u:nth-child(3) { left: 28px; }
+
+  /* a desktop app: one close affordance on the RIGHT and an app mark, so it does not
+     read as another browser window the way a second dotted title bar would */
+  .g .bar.win u { left: auto; right: 8px; width: 7px; height: 2px; border-radius: 0; top: 8px; }
+  .g .mark {
+    position: absolute; left: 50%; top: 28px; transform: translateX(-50%);
+    width: 26px; height: 26px; border-radius: 7px; background: var(--verdigris);
+  }
+  .g .lines { position: absolute; left: 13px; right: 13px; top: 30px; }
+  .g .lines i { display: block; height: 3px; background: var(--verdigris); margin-bottom: 6px; opacity: .55; }
+  .g .lines i:nth-child(2) { width: 70%; }
+  .g .lines i:nth-child(3) { width: 45%; }
+
+  .arrow { flex: none; width: 46px; height: 2.5px; background: var(--rule); position: relative; }
+  .arrow::after {
+    content: ""; position: absolute; right: 0; top: -5px; width: 12px; height: 12px;
+    border-top: 2.5px solid var(--rule); border-right: 2.5px solid var(--rule);
+    transform: rotate(45deg);
+  }
+
+  .slug { font-size: 19px; font-weight: 700; color: var(--verdigris); letter-spacing: -0.01em; }
+
+  /* the set keeps growing — an open slot says so without naming anything */
+  .more { display: flex; align-items: center; gap: 20px; padding-top: 2px; }
+  .more .slot {
+    width: 84px; height: 40px; flex: none; border: 2.5px dashed var(--rule);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; font-weight: 700; color: var(--rule); line-height: 1;
+  }
+  .more .cap { font-family: var(--serif); font-size: 18px; color: var(--muted); }
+</style>
+</head>
+<body>
+  <header class="head">
+    <div class="repo">rockbenben<span class="slash">/</span>aishort-skills</div>
+    <div class="compat">any agent that reads SKILL.md</div>
+  </header>
+
+  <div class="main">
+    <div class="say">
+      <h1>Skills that make things.</h1>
+      <div class="sub">Installable tools for AI coding agents. Each one turns something you
+        <b>have</b> into something you can <b>ship</b>.</div>
+    </div>
+
+    <div class="flow">
+      <div class="step">
+        <div class="g"><div class="bars"><i></i><i></i><i></i></div><div class="tag">HTML</div></div>
+        <div class="arrow"></div>
+        <div class="g out"><div class="sun"></div><div class="hill"></div><div class="hill two"></div><div class="tag">PNG</div></div>
+        <div class="slug">html-shot</div>
+      </div>
+
+      <div class="step">
+        <div class="g"><div class="bars"><i></i><i></i><i></i></div><div class="tag">MD</div></div>
+        <div class="arrow"></div>
+        <div class="g out"><div class="bar"><u></u><u></u><u></u></div><div class="lines"><i></i><i></i><i></i></div></div>
+        <div class="slug">md-web</div>
+      </div>
+
+      <div class="step">
+        <div class="g"><div class="bars"><i></i><i></i><i></i></div><div class="tag">WEB APP</div></div>
+        <div class="arrow"></div>
+        <div class="g out"><div class="bar win"><u></u></div><div class="mark"></div><div class="tag">.EXE</div></div>
+        <div class="slug">nextjs-to-tauri</div>
+      </div>
+
+      <div class="more">
+        <div class="slot">+</div>
+        <div class="cap">and whatever lands next</div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="foot">
+    <div class="install"><span class="sigil">$</span> npx skills add rockbenben/aishort-skills</div>
+    <div class="compat">Claude Code · Cursor · OpenClaw</div>
+  </footer>
+</body>
+</html>
