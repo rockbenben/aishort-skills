@@ -62,18 +62,22 @@ npx skills add rockbenben/aishort-skills
 ```
 
 或者 clone 本仓库，把 `skills/html-shot/` 拷贝（或软链）进 agent 的 skills 目录，
-例如 `~/.claude/skills/html-shot`。
+Claude Code 放在 `~/.claude/skills/`，Codex 与 Gemini CLI 等通用约定是 `~/.agents/skills/`，
+其他 agent 按各自的 skills 目录放即可。
 
 **仅首次运行** —— 装引擎：
 
 ```bash
-npm --prefix ~/.claude/skills/html-shot install
-node ~/.claude/skills/html-shot/node_modules/playwright/cli.js install chromium
+# $SKILL_DIR = skill 实际所在目录（Claude Code 为 ~/.claude/skills/html-shot）
+SKILL_DIR=~/.claude/skills/html-shot
+cd "$SKILL_DIR" && npm install && node node_modules/playwright/cli.js install chromium
 ```
 
 - **需要：** Node.js ≥ 20.9，glibc Linux / macOS / Windows。**不支持 Alpine/musl** ——
   Playwright 没有 musl 版 Chromium。
-- **占用：** 约 50 MB 依赖，外加约 150 MB 的 Chromium（全局缓存，多项目共用）。
+- **占用：** 约 47 MB 依赖，外加磁盘上约 700 MB 的浏览器 —— Playwright 会同时装
+  `chromium` 和 `chromium_headless_shell`（常见的「约 150 MB」说的是压缩包大小）。
+  全局缓存，多项目共用。
   首次安装需要几分钟。
 - **Linux 上**还多两步（Chromium 的共享库，以及中文/emoji 系统字体），见
   [`SKILL.md`](SKILL.md#first-run-install-the-engine-once)。
@@ -85,8 +89,8 @@ node ~/.claude/skills/html-shot/node_modules/playwright/cli.js install chromium
 `template.example.html` 是一张现成的 1200×630 卡片，只用系统字体：
 
 ```bash
-cp ~/.claude/skills/html-shot/template.example.html og.html
-node ~/.claude/skills/html-shot/render.mjs og.html og.png
+cp "$SKILL_DIR/template.example.html" og.html
+node "$SKILL_DIR/render.mjs" og.html og.png
 ```
 
 整个循环就这些。改 `og.html`，重跑，看 PNG。
@@ -114,7 +118,7 @@ hero 区域」「生成 og 图」—— skill 会自动触发。
   apple-touch 图标压成纯黑），缩放不到方形画框的图标源也会当场失败，而不是让一个
   缩在角落里的标记带着退出码 0 发出去。
 - **交付体积可控。** `--palette` 把平涂画面量化成调色板 PNG —— 一张 1200×630 的中文卡
-  338 KB → 134 KB，`--colors 16` 则到 37 KB，肉眼无差别。（调色板 png 存的是位深，
+  85 KB → 37 KB，`--colors 16` 则到 15 KB，肉眼无差别。（调色板 png 存的是位深，
   所以档位只有 `2`/`4`/`16`/`256`，没有中间值。）
 - **影响面收得很窄。** 只有两个目录对外提供，路径先做完全解析（`/../` 和软链都跑不出去），
   且每个请求都必须带上本次运行的随机 token —— 其他本地进程就算找到端口也只会拿到 403。

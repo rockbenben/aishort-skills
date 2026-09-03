@@ -82,7 +82,7 @@ import { fileURLToPath } from "node:url";
 
 const SKILL_DIR = dirname(fileURLToPath(import.meta.url));
 const PW_CLI = resolve(SKILL_DIR, "node_modules/playwright/cli.js");
-const INSTALL_HINT = `npm --prefix "${SKILL_DIR}" install && node "${PW_CLI}" install chromium`;
+const INSTALL_HINT = `cd "${SKILL_DIR}" && npm install && node "${PW_CLI}" install chromium`;
 
 // Check the engine before importing: on an old Node the imports below fail with a syntax
 // or module error that reads like a broken install rather than "your Node is too old".

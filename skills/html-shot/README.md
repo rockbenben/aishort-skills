@@ -28,6 +28,8 @@ size — so you never have to leave CSS.
   size instead, and a `viewBox` that is present but unreadable is rewritten rather than left
   in charge.)
 - **Screenshots** — a whole page, or one element of it, from a URL or a local file.
+- **Anything CJK, emoji or mixed-script** — system fonts do the work, so there is no font to
+  subset or bundle.
 - **One sheet, many assets** — lay every mark out on a single page, then shoot them one at a
   time with `--selector`, stripping the sheet's own framing with `--style`.
 - **A favicon or app-icon set** — `icons.mjs` turns one source into the handful of files a
@@ -62,19 +64,22 @@ npx skills add rockbenben/aishort-skills
 ```
 
 Or clone this repo and copy (or symlink) `skills/html-shot/` into your agent's skills
-folder, e.g. `~/.claude/skills/html-shot`.
+folder — `~/.claude/skills/` for Claude Code, `~/.agents/skills/` for the cross-runtime
+convention Codex and Gemini CLI also read, or wherever your agent keeps them.
 
 **First run only** — install the engine:
 
 ```bash
-npm --prefix ~/.claude/skills/html-shot install
-node ~/.claude/skills/html-shot/node_modules/playwright/cli.js install chromium
+# $SKILL_DIR = wherever the skill landed (Claude Code: ~/.claude/skills/html-shot)
+SKILL_DIR=~/.claude/skills/html-shot
+cd "$SKILL_DIR" && npm install && node node_modules/playwright/cli.js install chromium
 ```
 
 - **Needs:** Node.js ≥ 20.9 on glibc Linux, macOS, or Windows. **No Alpine/musl** — Playwright
   ships no musl Chromium build.
-- **Footprint:** ~50 MB of dependencies plus a ~150 MB Chromium, globally cached and shared
-  across projects. The first install takes a few minutes.
+- **Footprint:** ~47 MB of dependencies, plus ~700 MB of browser on disk — Playwright installs
+  both `chromium` and `chromium_headless_shell` (the ~150 MB you see quoted is the compressed
+  download). Cached globally and shared across projects. The first install takes a few minutes.
 - **On Linux**, two extra steps (Chromium's shared libraries, and CJK/emoji system fonts) —
   see [`SKILL.md`](SKILL.md#first-run-install-the-engine-once).
 
@@ -85,8 +90,8 @@ There's no need to probe whether it's installed. Run it; it tells you, with the 
 `template.example.html` is a ready-made 1200×630 card that uses system fonts only:
 
 ```bash
-cp ~/.claude/skills/html-shot/template.example.html og.html
-node ~/.claude/skills/html-shot/render.mjs og.html og.png
+cp "$SKILL_DIR/template.example.html" og.html
+node "$SKILL_DIR/render.mjs" og.html og.png
 ```
 
 That's the whole loop. Edit `og.html`, re-run, look at the PNG.
@@ -119,7 +124,7 @@ Or, in an agent, just say what you want — *"turn this design into a 2x og imag
   source that cannot be scaled to a square frame fails up front instead of shipping a mark
   stranded in the corner with exit code 0.
 - **Ships small.** `--palette` quantises flat artwork to a palette PNG — on a 1200×630 CJK
-  card, 338 KB → 134 KB, or 37 KB at `--colors 16`, with no visible change. (A palette png is
+  card (the bundled template), 85 KB → 37 KB, or 15 KB at `--colors 16`, with no visible change. (A palette png is
   a bit depth, so the sizes are `2`/`4`/`16`/`256` and nothing in between.)
 - **A narrow blast radius.** Only two directories are served, paths are fully resolved first
   (neither `/../` nor a symlink escapes), and every request must carry a per-run random

@@ -1,7 +1,7 @@
 ---
 name: html-shot
-version: 1.1.0
-description: Use when a design has to become image assets through a real browser — an og:image or social preview card, an HTML/CSS or SVG design exported as PNG/JPEG/WebP, a screenshot of a page or of one element in it, or a favicon / app-icon set (.ico, .icns, apple-touch, PWA) for a site, Electron or Tauri app. Also use when a card's copy is CJK, emoji or mixed-script and bundling a font is not an option, or when an og image, favicon or logo raster needs regenerating after a design change.
+version: 1.1.3
+description: Use when a design has to become image assets through a real browser — an og:image or social preview card, an HTML/CSS or SVG design exported as PNG/JPEG/WebP, a screenshot of a page or of one element in it, or a favicon / app-icon set (.ico, .icns, apple-touch, PWA) for a site, Electron or Tauri app. Also use when a card's copy is CJK, emoji or mixed-script and bundling a font is not an option. Triggers on 生成 og 图 / 社交卡片 / 网页截图 / HTML 转图片 / favicon / 应用图标.
 tags: [og-image, social-card, html-to-image, svg-to-png, favicon, app-icon, screenshot, playwright, chromium]
 homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/html-shot
 
@@ -21,17 +21,16 @@ metadata:
 
 # html-shot — a design in, the image assets out
 
-Render an HTML file, a URL, or an SVG into a **pixel-perfect** static image. The engine is
-**Playwright** (mature headless Chromium): any CSS renders faithfully and **CJK text and
-emoji come from system fonts with nothing to bundle**. A local file is served over a
-throwaway `127.0.0.1` server, so Chromium resolves every reference itself — relative paths,
-site-absolute `/xxx`, `@import`, `srcset`, fonts named inside a stylesheet — and a card
-renders correctly with the project's dev server down.
+Render an HTML file, a URL, or an SVG into a **pixel-perfect** static image with **Playwright**
+(headless Chromium): any CSS renders faithfully, and **CJK text and emoji come from system
+fonts with nothing to bundle**. A local file is served over a throwaway `127.0.0.1` server, so
+Chromium resolves every reference itself — relative paths, site-absolute `/xxx`, `@import`,
+`srcset`, fonts named inside a stylesheet — and a card renders correctly with the project's dev
+server down.
 
-The browser does the rendering; this skill takes care of everything around it, so you never
-have to leave CSS: **what to shoot** (the whole body, one element, the full page),
-**how sharp** (supersampling, `--dpr`), and **what ships** (format, palette size, and for an
-icon set, the per-platform files).
+You never have to leave CSS. The skill handles **what to shoot** (the whole body, one element,
+the full page), **how sharp** (supersampling, `--dpr`), and **what ships** (format, palette
+size, and for an icon set, the per-platform files).
 
 Two entry points, one engine:
 
@@ -70,15 +69,14 @@ Two entry points, one engine:
    - `icon.example.html` — a transparent mark or app icon. The shape sits on a **child**
      element (a background on `body` propagates to the root canvas and ignores its
      `border-radius`), and every size is in `vmin`, so the mark fills whatever size it is
-     rendered at — 1024 for an icon master, 180 for apple-touch.
+     rendered at. `icons.mjs` renders it once at 1024 and downsamples from there.
 3. **Render** with `render.mjs` (see Usage).
 4. **Look at the output image before reporting success.** Read the PNG back — clipped text,
    a missing glyph, or a font that silently fell back are all visible in one glance. A
    referenced asset that 404s prints a `note —` line naming the path and makes the exit
    code non-zero (the image is still written, marked `⚠`).
-5. **With `--transparent`, the eye is the one thing that cannot check it.** Every viewer
-   paints transparent pixels white, so a badge that kept its background looks exactly like
-   one that dropped it. Ask the file instead (`sharp` ships with this skill):
+5. **With `--transparent`, the eye cannot check it** — every viewer paints transparent pixels
+   white. Ask the file instead (`sharp` ships with this skill):
 
    ```bash
    node -e "require('{SKILL_DIR}/node_modules/sharp')('badge.png').stats().then(s=>console.log(s.isOpaque?'NO alpha — the page paints its own background':'transparent'))"
@@ -87,9 +85,13 @@ Two entry points, one engine:
 ## First run (install the engine, once)
 
 ```bash
-npm --prefix {SKILL_DIR} install
-node {SKILL_DIR}/node_modules/playwright/cli.js install chromium   # instant if chromium is already there (shared global cache)
+cd {SKILL_DIR} && npm install && node node_modules/playwright/cli.js install chromium
 ```
+
+Run `npm install` **inside** the skill directory as shown, not `npm --prefix {SKILL_DIR} install`:
+when the directory is reached through a symlink (a checkout linked into the agent's skills
+directory), `--prefix` rewrites `package-lock.json` with absolute paths. The Chromium step is instant if
+the browser is already in Playwright's shared global cache.
 
 **Playwright ships Chromium for** Debian 11–13, Ubuntu 18.04–26.04 (x64 and arm64),
 macOS 10.13+ (Intel and Apple silicon), and Windows x64. There is **no musl build**, so
@@ -108,9 +110,13 @@ node {SKILL_DIR}/node_modules/playwright/cli.js install --with-deps chromium
 sudo apt install fonts-noto-cjk fonts-noto-color-emoji   # Debian/Ubuntu
 ```
 
-`{SKILL_DIR}` is this skill's install directory (`~/.claude/skills/html-shot` by default in
-Claude Code). Footprint: ~50 MB of dependencies plus a ~150 MB Chromium (globally cached and
-shared across projects); the first install takes a few minutes. There is no need to probe
+`{SKILL_DIR}` is this skill's own directory — whatever path the agent reports when it loads
+the skill (`~/.claude/skills/html-shot`, `~/.agents/skills/html-shot`, a project-local
+`.skills/`, …). Footprint: ~47 MB of dependencies, plus **~700 MB of browser on disk** — Playwright
+installs both `chromium` (~430 MB) and `chromium_headless_shell` (~270 MB); the ~150 MB
+figure quoted elsewhere is the compressed download. Both are cached globally and shared
+across projects, so it is paid once per Playwright version. The first install takes a few
+minutes. There is no need to probe
 whether it is installed — run `render.mjs` and it will tell you, with the command to run.
 
 ## Usage
@@ -144,21 +150,21 @@ measurement and the frame agree and repeated runs are identical.
 | `--selector S` | Shoot one element (the output size follows the element; `--width/--height` still set the viewport it lays out in) |
 | `--style CSS` | Extra CSS injected after load, before measuring — pairs with `--selector` to strip a preview sheet's own framing off the element you are shooting |
 | `--full` | Shoot the full page (same: `--width/--height` set the viewport, not the output size) |
-| `--channel C` | Launch an installed browser instead of the bundled Chromium: `chrome` \| `msedge` (+ `-beta`/`-dev`). Skips the ~150 MB download, at the cost of output that tracks whatever version is installed |
+| `--channel C` | Launch an installed browser instead of the bundled Chromium: `chrome` \| `msedge` (+ `-beta`/`-dev`). Skips the browser download entirely (~700 MB on disk), at the cost of output that tracks whatever version is installed |
 
 Sizing follows one rule everywhere — **output pixels = CSS size × `--dpr`** — in all three
 modes (fixed size, `--selector`, `--full`). `--scale` only decides how far to supersample
 before scaling back down. Option combinations that get ignored (passing `--base` alongside a
 URL, say) print a note rather than being silently dropped.
 
-**Making the file smaller.** A card is flat artwork — a few dozen real colours in wide areas
-— and a truecolour PNG stores it as if it were a photograph. `--palette` usually cuts the
-file to a third and `--colors 16` to a tenth, with no visible change (measured on a 1200×630
-CJK card: 338 KB at 13,297 colours → 134 KB at 256 → 37 KB at 16 → 16 KB at 4). Dithering is off, because on
-flat fills it only sprays noise for the compressor to carry. Reach for it on cards, marks and
-diagrams; leave it off for photographs and long smooth gradients, where too few colours band.
-Alpha survives quantisation, so transparent badges shrink the same way. For photographic
-cards `--format webp --quality 82` is still the better trade.
+**Making the file smaller.** A card is flat artwork, and a truecolour PNG stores it as if it
+were a photograph. `--palette` roughly halves it and `--colors 16` cuts it to a sixth, with no
+visible change (the bundled `template.example.html`, a 1200×630 CJK card: 85 KB truecolour
+→ 37 KB at 256 → 15 KB at 16 → 6 KB at 4, i.e. roughly a half, a sixth and a twelfth);
+dithering is off
+because on flat fills it only adds noise. Use it on cards, marks and diagrams; leave it off for
+photographs and long smooth gradients, where too few colours band — there
+`--format webp --quality 82` is the better trade. Alpha survives quantisation.
 
 Examples:
 
@@ -195,8 +201,9 @@ node {SKILL_DIR}/render.mjs brand.html favicon.png --selector "#mark" --transpar
 node {SKILL_DIR}/icons.mjs <source.svg|.html|.png|url> <outdir> [--preset P] [--only LIST] [--pwa] [--bg C] [--small SRC]
 ```
 
-Same engine — it shells out to `render.mjs` for a 1024×1024 transparent master, then fans that
-out into the handful of files the target actually reads, under the names it expects.
+Same engine — it shells out to `render.mjs` for a 1024×1024 transparent master (`--scale`,
+`--wait`, `--base`, `--style` and `--channel` pass through to that render), then fans the
+master out into the handful of files the target actually reads, under the names it expects.
 
 | `--preset` | Writes |
 |---|---|
@@ -205,78 +212,65 @@ out into the handful of files the target actually reads, under the names it expe
 | `electron` | `icon.ico` · `icon.icns` · `icon.png` (1024) |
 | `tauri` | `icon.ico` · `icon.icns` · `icon.png` · `32x32.png` · `128x128.png` · `128x128@2x.png` |
 
-**How many files you need is a different question from which target you are building for.** The
-preset picks the *names*; `--only` picks *how many*. Most icons in the wild are just a page icon
-— a docs page, an internal tool, a demo — and for those, one file is the whole job:
+**How many files you need is a different question from which target you are building for.**
+The preset picks the *names*; `--only` picks *how many*. Most icons in the wild are just a page
+icon, and for those one file is the whole job:
 
 | What you are icon-ing | Command | Files |
 |---|---|---|
 | A page: docs, internal tool, demo | `--only ico` | **1** — browsers fetch `/favicon.ico` themselves, nothing to wire up |
-| A public site people bookmark | *(default)* | **3** — `.ico` + SVG + apple-touch |
-| An installable PWA | `--pwa` | **5** — the three, plus 192/512 |
+| A public site people bookmark | *(default)* | **3** from an SVG source — `.ico` + SVG + apple-touch; **2** from HTML or a raster, which have no vector to pass through |
+| An installable PWA | `--pwa` | **5** from an SVG source (**4** otherwise) — the above, plus 192/512 |
 | A desktop app | `--preset electron` | **3** — `.ico` + `.icns` + 1024 png |
 | A Next app, no legacy audience | `--preset next --only svg,apple` | **2** — `icon.*` + `apple-icon.png`, both auto-wired |
 
 `--only` takes `ico,svg,apple,pwa` on the web presets and `ico,icns,png` on the app ones, so any
-subset works (`--only ico,svg` for a site with no iOS audience). `--pwa` stays opt-in because a
-site that is not installable never reads those two files.
+subset works. `--pwa` stays opt-in because a site that is not installable never reads those two
+files — and they cannot share an output directory with `--preset next` (the manifest fetches
+`/icon-192.png` from the site root, i.e. `public/`, while the next preset writes into `app/`), so
+build them in two passes: `--preset next` into `app/`, then `--only pwa` into `public/`.
 
-The PWA pair is the one thing that cannot share an output directory with `--preset next`: the
-manifest fetches `/icon-192.png` from the site root, which in a Next app means `public/`, while
-the next preset writes App Router convention names into `app/`. Build them in two passes —
-`--preset next` into `app/`, then `--only pwa` into `public/`. Asking for both at once is an
-error rather than two files nothing can fetch.
+Of the default three, apple-touch is the one to drop when nobody will add the page to an iOS
+home screen. Keep the SVG — it is what modern browsers display, and with an SVG source it costs
+a file copy. Keep the `.ico` — browsers and crawlers request `/favicon.ico` whether or not you
+ship one, so leaving it out trades tens of KB (60 KB from the bundled `icon.example.html`)
+for a 404 on every cold visit.
 
-Of the three, apple-touch is the one worth dropping when nobody will add the page to an iOS home
-screen. Dropping the SVG rarely pays: when the source *is* an SVG it costs a file copy, and it is
-the file modern browsers actually display. Dropping the `.ico` saves the most bytes and costs the
-most: browsers and crawlers request `/favicon.ico` whether or not you ship one, so leaving it out
-trades ~20 KB for a 404 on every cold visit.
-
-The files do nothing until something points at them, so **the run ends by printing the exact
-`<link>` lines to paste into `<head>`** — only for the files it actually wrote. (`favicon.ico`
-needs no line, and Next's App Router wires its files up by filename.) Copy them from the output
-rather than writing them by hand.
+**The run ends by printing the exact `<link>` lines to paste into `<head>`**, only for the
+files it actually wrote (`favicon.ico` needs no line; Next's App Router wires its files up by
+filename). Copy them from the output rather than writing them by hand.
 
 **Four rules are baked in, because each one is a silent failure otherwise:**
 
 - **`apple-touch-icon` is written opaque, always.** iOS composites alpha onto black, so a
-  rounded mark ships with black corners. It is flattened onto `--bg` (default `#ffffff`) and
-  the channel is then removed. For a rounded mark pass the mark's own fill, so the corners
-  disappear under iOS's own mask. A see-through `--bg` (`transparent`, or a hex with a zero
-  alpha) is refused: it would flatten onto nothing and bake the icon solid black — the exact
-  failure the flag exists to prevent, behind a ✔.
-- **No single image is upscaled past the master.** A 512 that is really an 8× interpolation
-  of a 64 px source is worse than an honest 64, because nothing downstream can tell until
-  someone looks at the home screen. apple-touch, the PWA pair, the desktop size ladder and
-  the `icon.png` fallback are each clamped to what the source has to give, and the clamp is
-  announced — including in the printed manifest snippet, which quotes the sizes on disk
-  rather than the ones you asked for. The two containers are the exception: `png2icons` fills
-  a `.ico` up to 256 and a `.icns` up to 1024 with its own ladder whatever it is handed, so a
-  master below those still yields upscaled entries inside them. Give it a 1024 px square
-  master and the question does not arise.
+  rounded mark would ship with black corners. It is flattened onto `--bg` (default `#ffffff`)
+  and the alpha channel removed; for a rounded mark pass the mark's own fill, so the corners
+  disappear under iOS's own mask. A see-through `--bg` is refused rather than baking the icon
+  solid black behind a ✔.
+- **No single image is upscaled past the master.** apple-touch, the PWA pair, the desktop size
+  ladder and the `icon.png` fallback are each clamped to what the source has to give, and the
+  clamp is announced — including in the printed manifest snippet, which quotes the sizes on
+  disk. The `.ico`/`.icns` containers are the exception (`png2icons` fills their ladders from
+  whatever it is handed), so give it a 1024 px square master and the question does not arise.
 - **An SVG is passed through, never synthesised.** A vector source is copied to
-  `favicon.svg`/`icon.svg` as-is — that file is what modern browsers actually display, and the
-  only one that can carry a `prefers-color-scheme` dark variant. A raster source simply gets no
-  SVG: wrapping it in `<svg><image href="data:...">` is larger than the PNG and still cannot
-  scale.
+  `favicon.svg`/`icon.svg` as-is — the file modern browsers display, and the only one that can
+  carry a `prefers-color-scheme` dark variant. A raster source simply gets no SVG.
 - **`--small` takes a second drawing for the 16 and 32 px `.ico` entries.** A logo with real
-  detail turns to mush at 16 px no matter how good the downsampling is; the fix is a simpler
+  detail turns to mush at 16 px no matter how good the downsampling; the fix is a simpler
   drawing, not a better filter.
 
 Deliberately not emitted, because nothing reads them any more: the apple-touch size ladder
-(57/60/72/76/114/120/144/152 — iOS scales 180 down itself), `browserconfig.xml` and
-`mstile-*.png` (Windows tiles are gone), `mask-icon.svg` (Safari stopped using it for pinned
-tabs), and `*-precomposed.png`.
+(iOS scales 180 down itself), `browserconfig.xml` / `mstile-*.png`, `mask-icon.svg`, and
+`*-precomposed.png`.
 
 ## One sheet, many assets
 
-A brand sheet — every mark, logo lockup and card variant laid out on one page — is the
-comfortable way to design them, and `--selector` shoots any one of them. What gets in the way
-is the sheet itself: the swatch cell behind a rounded mark paints its own white, and an
-element shot keeps whatever shows through the corners, so `--transparent` alone comes back
-opaque. `--style` removes the framing for the duration of the shot without a second copy of
-the file:
+A brand sheet — every mark, logo lockup and card variant on one page — is the comfortable way
+to design them, and `--selector` shoots any one of them. The sheet's own framing gets in the
+way: the swatch cell behind a rounded mark paints its own white, and an element shot keeps
+whatever shows through the corners, so `--transparent` alone comes back opaque. `--style`
+removes the framing for the duration of the shot; it is injected before anything is measured,
+so a rule that changes layout is reflected in the output size rather than fighting it.
 
 ```bash
 for m in mark1 mark2 logo; do
@@ -285,48 +279,35 @@ for m in mark1 mark2 logo; do
 done
 ```
 
-The CSS is injected before anything is measured, so a rule that changes layout is reflected
-in the output size rather than fighting it.
-
 ## Rasterising an SVG
 
-Hand `render.mjs` an `.svg` and it renders that instead of an HTML file: the file is wrapped
-in a minimal page (`margin:0`, the svg pinned to the viewport) and the default size comes from
-the SVG's own `width`/`height`, or its `viewBox` when those are absent — so a
-`viewBox="0 0 100 100"` icon comes out 100×100 unless you say otherwise. Give one of
+Hand `render.mjs` an `.svg` and it is wrapped in a minimal page (`margin:0`, the svg pinned to
+the viewport). The default size comes from the SVG's own `width`/`height`, else its `viewBox`
+— so a `viewBox="0 0 100 100"` icon comes out 100×100 unless you say otherwise. Give one of
 `--width`/`--height` and the other follows the SVG's aspect ratio.
 
-**The `viewBox` is what makes it scale.** An SVG without one has no user-unit coordinate
-system to stretch, so `width:100%` does nothing and the artwork sits at its authored size in
-the top-left corner of whatever frame you asked for. When the root declares a `width`/`height`
-the missing `viewBox` is synthesised from them, so those files scale correctly — as is a
-`viewBox` that is present but unreadable (a malformed value, or an empty `viewBox=""`), which
-is overwritten in place and noted, never appended alongside (a second `viewBox` on the same
-tag is dropped by the parser, leaving the broken one in charge). When the root declares neither, nothing can be inferred and the render
-says so rather than handing back a mark stranded in the corner. A raster input (`.png`, `.jpg`,
-…) is refused outright — it would otherwise be served as HTML and come out as a page of
-mojibake.
+**The `viewBox` is what makes it scale.** Without one the artwork sits at its authored size
+in the top-left corner of whatever frame you asked for. When the root declares a
+`width`/`height`, the missing `viewBox` is synthesised from them; a `viewBox` that is present
+but unreadable (malformed, or `viewBox=""`) is overwritten in place and noted, never appended
+alongside (the parser keeps the first occurrence). When the root declares neither, nothing can
+be inferred and the render says so. A raster input (`.png`, `.jpg`, …) is refused outright — it
+would otherwise be served as HTML and come out as mojibake.
 
-Why go through a browser when `sharp` rasterises SVG on its own: **filters do not agree
-between the two engines.** An `feTurbulence` + `feDisplacementMap` ink edge comes out crisp
-and broken in Chromium and smoothed over by sharp's rasteriser — if that texture is the
-design, only the browser gives you the design. Plain shapes and paths look the same either
-way, and for those `sharp` alone is lighter.
-
-Two notes: an SVG's own `<text>` is drawn with system fonts, the same as HTML, and the
-generated wrapper carries no `lang` — so CJK glyph fallback follows the rendering machine's
-locale. Convert text to paths if you need the same bytes on every machine. And `--scale`
-matters more than usual for filter-heavy marks — supersampling
-resamples the generated grain, so `--scale 1` stays closest to what a 1× browser screenshot
-produces.
+Go through the browser rather than `sharp`'s own SVG rasteriser when the mark leans on filters
+(`feTurbulence`, `feDisplacementMap`): the two engines disagree there, and if that texture is
+the design only the browser gives you the design. Plain shapes look the same either way, and
+for those `sharp` alone is lighter. For filter-heavy marks `--scale 1` stays closest to a 1×
+browser screenshot, since supersampling resamples the generated grain. An SVG's own `<text>`
+is drawn with system fonts and the wrapper carries no `lang`, so CJK fallback follows the
+rendering machine's locale — convert text to paths for the same bytes on every machine.
 
 ## Making an og card
 
 Write the design as an HTML file whose `body` has a fixed size (e.g.
 `width:1200px; height:630px`), and reference fonts however is natural — site-absolute
 `url("/fonts/x.woff2")` resolves against `public/`, relative `url("fonts/x.woff2")` against
-the HTML's own directory. Start from
-`template.example.html`: copy it to your own `og.html`, edit the copy, then
+the HTML's own directory. Copy `template.example.html` to your own `og.html`, edit it, then
 
 ```bash
 node {SKILL_DIR}/render.mjs og.html public/og.png
@@ -354,17 +335,16 @@ fonts named inside a stylesheet, and assets injected by scripts all just work.
   reach outside it.
 - **The `public/` search is deliberately narrow**: the directory must be spelled exactly
   `public` on disk, and the walk stops at the project root (the first directory holding
-  `package.json` or `.git`). Without that, a case-insensitive match on Windows/macOS would
-  happily adopt the OS's own shared folder (`C:\Users\Public`, `~/Public`) as a served root.
-  Pass `--base` when you want to be explicit.
-- **A `file://` URL is treated as a local file**, not a remote page, so it gets the same
-  roots, charset and missing-asset accounting as a plain path.
+  `package.json` or `.git`) — otherwise a case-insensitive match on Windows/macOS would adopt
+  the OS's own shared folder (`C:\Users\Public`, `~/Public`) as a served root. Pass `--base`
+  to be explicit.
+- **A `file://` URL is treated as a local file**, not a remote page: same roots, charset and
+  missing-asset accounting as a plain path.
 - **A missing asset is loud**: the request prints a `note —` line naming the path, and the
   run exits non-zero (the image is still written, for inspection) — CI cannot silently ship
   a card with a hole in it.
 - **Only this render's Chromium can talk to the server**: every request must carry a
-  per-run random token, injected into the browser's requests; any other local process that
-  finds the port gets 403.
+  per-run random token; any other local process that finds the port gets 403.
 - **Everything in those two directories is reachable by the page.** Point `--base` at the
   asset directory rather than a project root if that matters.
 - The HTML genuinely executes in local Chromium, JavaScript and outbound requests included.
@@ -393,6 +373,7 @@ fonts named inside a stylesheet, and assets injected by scripts all just work.
 | The png is huge | Flat artwork stored as truecolour. `--palette` (or `--colors 16`) usually cuts it to a third or a tenth, invisibly. For photographic cards use `--format webp --quality 82`, or `jpeg`. |
 | `--palette` leaves visible banding | Too few colours for a smooth gradient or a photograph. Raise `--colors`, or drop the flag — quantisation is for flat artwork. |
 | An SVG's filter texture looks smoother than in the browser | Supersampling resampled the generated grain. Pass `--scale 1` to match a 1× browser screenshot. |
+| `package-lock.json` suddenly full of absolute paths | The engine was installed with `npm --prefix <dir>` through a symlinked skill directory. `git checkout` the lockfile and install with `cd {SKILL_DIR} && npm install` instead. |
 <!-- The engine comparison (Satori, hosted APIs, wkhtmltoimage) lives in README.md — it is
      background for a human choosing a tool, not something to carry in agent context. The
      actionable half is in "When not to use" above. -->

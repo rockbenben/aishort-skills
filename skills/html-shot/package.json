@@ -1,6 +1,6 @@
 {
   "name": "html-shot-skill",
-  "version": "1.1.0",
+  "version": "1.1.2",
   "private": true,
   "type": "module",
   "description": "html-shot skill engine: render HTML/SVG/URL to PNG/JPEG/WebP via Playwright + sharp",
@@ -9,8 +9,8 @@
     "node": ">=20.9.0"
   },
   "dependencies": {
-    "playwright": "^1.62.0",
+    "playwright": "^1.62.1",
     "png2icons": "^2.0.1",
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.4"
   }
 }

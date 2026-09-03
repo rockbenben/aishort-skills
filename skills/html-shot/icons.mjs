@@ -58,7 +58,7 @@ try {
   png2icons = await import("png2icons");
 } catch (e) {
   console.error(`html-shot/icons: dependencies are not installed (${e.code || e.message}).`);
-  console.error(`Run once:\n  npm --prefix "${SKILL_DIR}" install`);
+  console.error(`Run once:\n  cd "${SKILL_DIR}" && npm install`);
   process.exit(1);
 }
 

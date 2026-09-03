@@ -8,7 +8,8 @@
     node {SKILL_DIR}/render.mjs icon.html icon.png --width 1024 --height 1024 --transparent
     node {SKILL_DIR}/icons.mjs  icon.html public --preset web --bg "#1b3fd8"
 
-  ({SKILL_DIR} = this skill's install directory, ~/.claude/skills/html-shot by default.)
+  ({SKILL_DIR} = this skill's own directory — wherever your agent installed it, e.g.
+   ~/.claude/skills/html-shot or ~/.agents/skills/html-shot.)
 
   WHY EVERY SIZE BELOW IS IN vmin, NOT px: an icon has no one size. icons.mjs renders the
   master at 1024, you may want 512 or 180 elsewhere, and a body pinned to `width:320px`
