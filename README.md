@@ -75,7 +75,7 @@ letterboxed or upscaled behind a ✔.
 clawhub install html-shot
 ```
 
-- **Needs:** Node.js ≥ 20.9 on glibc Linux, macOS, or Windows (no Alpine/musl). First install pulls ~50 MB of deps plus a ~150 MB Chromium.
+- **Needs:** Node.js ≥ 20.9 on glibc Linux, macOS, or Windows (no Alpine/musl). First install pulls ~47 MB of deps plus a Chromium that is ~150 MB to download and ~700 MB on disk, cached once per Playwright version.
 - **Setup:** [English](skills/html-shot/README.md) · [中文](skills/html-shot/README.zh.md)
 - **Reference:** [`SKILL.md`](skills/html-shot/SKILL.md) · starters: [`template.example.html`](skills/html-shot/template.example.html) (og card) · [`icon.example.html`](skills/html-shot/icon.example.html) (transparent icon / mark)
 
@@ -105,7 +105,7 @@ clawhub install wpf-desktop
 ### [nextjs-to-tauri](skills/nextjs-to-tauri/) — Next.js 16 → Tauri 2 desktop app
 
 Wrap a client-side Next.js 16 (App Router) app in a thin Tauri 2 native shell — ship a
-~3–10 MB desktop/portable `.exe` (vs ~120 MB Electron) with auto-update, system tray,
+~3–10 MB desktop/portable `.exe` (vs ~150 MB Electron) with auto-update, system tray,
 single-instance, and window-state, built entirely in GitHub Actions (no local Rust). The
 value is the hard-won gotchas: the `trailingSlash` white-screen on static export, next-intl
 i18n routing, updater signing keys, and cross-platform CI.
