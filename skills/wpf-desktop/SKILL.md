@@ -1,12 +1,12 @@
 ---
 name: wpf-desktop
-version: 1.0.0
+version: 1.0.1
 description: Use when building, debugging, or releasing a WPF desktop app on .NET — a tray utility, a portable single-file exe, a Windows tool with hotkeys or multi-monitor logic. Reach for it on dependency and publish-profile choices, a white flash on open, a window that will not come to front, DPI maths wrong on a second monitor, controls crushed by long translations, slow startup, or a tagged release pipeline. Triggers on .csproj/.xaml files, net10.0-windows, UseWPF, or WPF、托盘应用、桌面小工具、单文件 exe. Reference files are Chinese; SKILL.md is English.
 tags: [wpf, dotnet, csharp, desktop, windows, tray, single-file, xaml, github-actions, winget]
 homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/wpf-desktop
 
 metadata:
-  clawdbot:
+  openclaw:
     emoji: "🪟"
     files:
       - project-setup.md
@@ -66,7 +66,7 @@ Absolute numbers in those files (milliseconds, MB) come from one app on one mach
 
 Each of these is the "looks fine now, explodes much later" kind:
 
-- **Before touching layout**: read the container-semantics table under 「德语界面上控件被挤没」 in `pitfalls.md`. A horizontal `StackPanel` offers its children **infinite** width, so wrapping a `ContentPresenter` in one inside a control template means that control's text label can never wrap anywhere in the app — no amount of outer `Grid` fixes it.
+- **Before touching layout**: read the container-semantics table under 「德语界面上控件被挤没」 in `pitfalls.md` — that section also carries the mechanical form of the rule, including the third condition that took a first attempt from 64 false positives down to 1 real hit. A horizontal `StackPanel` offers its children **infinite** width, so wrapping a `ContentPresenter` in one inside a control template means that control's text label can never wrap anywhere in the app — no amount of outer `Grid` fixes it.
 - **Before adding `MinWidth`**: decide who truncates. `MinWidth` on a `TextBlock` with `TextTrimming` shifts truncation from the TextBlock to the parent's clip — invisible in LTR, but **in Arabic it cuts the start of the string, with no ellipsis**.
 - **Before changing window activation**: foreground and z-order are different things. The OS owns foreground; when it refuses, a z-order bump is still available as a fallback — but **never on a `Topmost` window**. `SetWindowPos` writes `WS_EX_TOPMOST` behind WPF's back while `Window.Topmost` still reads true, so WPF never re-applies it and that window silently stops being topmost for the rest of the process. Read the three guards under 「点了「设置」，窗口偶尔没到最前面」 in `pitfalls.md` first.
 - **Before moving work off the startup path**: a background build needs three things, not one — the UI thread must not `Wait()` on it (block long enough and Windows silently removes the app's low-level keyboard hooks for the rest of the session), a bounded wait is **not** the way out of that (it answers from a half-built index, i.e. returns wrong instead of slow), and a swallowed failure still has to be reported or you get "everything is listed but nothing is findable, with no error". See 「冷启动 1.9 秒，慢的却不是磁盘」 in `pitfalls.md`.
@@ -78,5 +78,9 @@ Each of these is the "looks fine now, explodes much later" kind:
 ## Before you finish
 
 - **Run `--smoke`**: WPF XAML is lazy-loaded — a broken window XAML throws nothing until that window opens, and ships that way. Have it assert every window laid out to a non-zero size: `Window.Show()` silently no-ops once the app has begun shutting down, and a throw-only smoke stays green through that (see 「harness 会自己引爆的三颗雷」 in `dev-switches.md`).
-- **UI changed? Run `--shots` and compare**: multi-language + multi-resolution + dark/light problems are all invisible in Chinese at comfortable sizes. But know its blind spot — the harness sets `MaxHeight` itself, so a window missing its own runtime height cap looks fine in every screenshot and still puts its OK button off-screen on a real laptop. That class is caught by review, not by `--shots`.
+- **UI changed? Run `--shots` and compare**: multi-language + multi-resolution + dark/light problems are all invisible in Chinese at comfortable sizes. But it has two blind spots, and both are structural — no number of extra screenshots closes them:
+  - The harness sets `MaxHeight` itself, so a window missing its own runtime height cap looks fine in every screenshot and still puts its OK button off-screen on a real laptop.
+  - A row that no harness state renders is simply not in the matrix. Conditional field panels are selected by *data*, so a rarely-used branch can have zero pixels across thousands of images.
+
+  **Make both into build-time tests rather than review items** — each judgement is pure text over the XAML, so it needs no run: every `SizeToContent` window has a runtime cap *and* a conservative XAML fallback sized for the smallest screen; every wrapping `TextBlock` has something to wrap against. Review misses both because both read as already handled: the runtime cap's own comment promises the XAML fallback (so nobody re-opens the XAML to check), and a `TextWrapping="Wrap"` looks like the wrapping was dealt with. See 「它查不出什么」 ×2 in `dev-switches.md`.
 - **Don't write size numbers into docs**: two releases later they no longer match. GitHub's asset list already shows exact sizes; keep only the judgment ("one big, one much smaller") in prose.
