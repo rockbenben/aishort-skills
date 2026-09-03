@@ -1,3 +1,4 @@
 config.json
 .deployed
 .claude/
+node_modules/

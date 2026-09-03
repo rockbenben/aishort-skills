@@ -145,7 +145,8 @@ skills/
 ├── nextjs-to-tauri/       # Next.js 16 → Tauri 2 desktop app migration
 └── nextjs-to-electron/    # Next.js → Electron desktop app (offline / no-WebView2)
 assets/               # README images — kept out of skills/ so they aren't installed
-.github/workflows/    # CI: auto-publishes changed skills to ClawHub on push
+scripts/              # validate-skills.mjs — the frontmatter and limit checks CI gates publishing on
+.github/workflows/    # CI: validates, then auto-publishes changed skills to ClawHub on push
 ```
 
 ## License

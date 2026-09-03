@@ -25,6 +25,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
       - name: Determine which skills to publish
         id: list
         env:
@@ -38,6 +42,7 @@ jobs:
             find skills -mindepth 1 -maxdepth 1 -type d \
               -exec test -f '{}/SKILL.md' ';' -print | sed 's#^skills/##'
           }
+          base=""
           if [ "$EVENT" = "workflow_dispatch" ]; then
             if [ -n "$INPUT_SKILL" ]; then
               dirs="$INPUT_SKILL"
@@ -60,7 +65,24 @@ jobs:
           fi
           json="$(printf '%s\n' "$dirs" | sed '/^$/d' | jq -R . | jq -cs .)"
           echo "skills=$json" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "Will publish: $json"
+
+      # Gate the whole workflow: publish only runs if this passes. It catches the failures
+      # that are invisible until after upload — frontmatter that is not valid YAML (OpenClaw
+      # then drops the metadata.openclaw block silently), a version that is not semver, a
+      # files: entry that no longer exists, an os value that can never match, and content
+      # changed without a version bump, which ClawHub refuses.
+      - name: Validate skills
+        env:
+          BASE: ${{ steps.list.outputs.base }}
+        run: |
+          npm install --no-save --no-audit --no-fund js-yaml@4
+          if [ -n "$BASE" ]; then
+            node scripts/validate-skills.mjs --changed-since "$BASE"
+          else
+            node scripts/validate-skills.mjs
+          fi
 
   publish:
     needs: detect
