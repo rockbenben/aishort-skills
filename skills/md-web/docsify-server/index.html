@@ -2,8 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
-    <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MD Web</title>
     <meta name="description" content="share and display markdown files online" />
     <link rel="stylesheet" href="assets/vue.css" />
@@ -77,8 +76,15 @@
         subMaxLevel: 2,
 
         search: {
-          maxAge: 86400000,
-          paths: "auto",
+          // 0, not a day: the index is keyed per path, and md-web serves one document
+          // per link. A cached index means the next document a reader opens is searched
+          // against the previous one's content and matches nothing. Re-indexing costs one
+          // fetch of the single .md being viewed.
+          maxAge: 0,
+          // Index the document being viewed. "auto" crawls the sidebar, and this server
+          // runs with loadSidebar: false — so it only ever indexed the landing README and
+          // never the uploaded file, i.e. search matched nothing at all.
+          paths: [location.hash.replace(/^#/, "").split("?")[0] || "/"],
           placeholder: "Search",
           noData: "No results found",
           depth: 2,
@@ -90,6 +96,21 @@
           headings: "h2, h3, h4, h5, h6",
           title: "",
         },
+
+        // Name the browser tab after the document, not after this viewer. A link people
+        // share ends up in tabs, bookmarks and previews, and "MD Web" told the reader
+        // nothing about what they opened. docsify 4 leaves document.title alone, so set
+        // it from the first heading and fall back to the static <title>.
+        plugins: [
+          function (hook) {
+            var fallback = document.title;
+            hook.doneEach(function () {
+              var h = document.querySelector(".markdown-section h1, .markdown-section h2");
+              var t = h && h.textContent ? h.textContent.trim() : "";
+              document.title = t || fallback;
+            });
+          },
+        ],
       };
     </script>
 

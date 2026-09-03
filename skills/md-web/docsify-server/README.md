@@ -11,7 +11,7 @@ If you arrived here without a specific document, the link you need should look l
 如果你看到的是这个页面而非具体文档，你需要的链接格式应该是：
 
 ```
-https://your-domain/index.html#/document-name
+https://your-domain/index.html#/md-web/20260903-091500-your-document
 ```
 
 Check the link you received and make sure the `#/document-name` part is included.
@@ -21,6 +21,6 @@ Check the link you received and make sure the `#/document-name` part is included
 ## Features / 功能
 
 - **Full-text search / 全文搜索** — search within the current document / 搜索当前文档内容
-- **Table of contents / 目录导航** — auto-generated from headings / 根据标题自动生成
+- **Table of contents / 目录导航** — auto-generated from headings, shown on screens wider than 1300px / 根据标题自动生成，宽度超过 1300px 的屏幕才显示
 - **Image zoom / 图片缩放** — click any image to view full size / 点击图片查看原图
 - **Word count / 字数统计** — reading time estimate / 自动估算阅读时间

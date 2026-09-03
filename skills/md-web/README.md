@@ -16,7 +16,9 @@ clawhub install md-web
 npx skills add rockbenben/aishort-skills
 ```
 
-Or install manually — clone this repo into your agent's skills directory (e.g. `~/.claude/skills/md-web`).
+Or install manually — clone this repo into your agent's skills directory: `~/.claude/skills/`
+for Claude Code, `~/.agents/skills/` for the cross-runtime convention Codex and Gemini CLI
+also read, or wherever your agent keeps them.
 
 ## Quick Start
 
@@ -62,7 +64,7 @@ On first use, the AI will ask for these fields:
 | bucket      | Yes      | Bucket name                                                               | `md-web`                              |
 | public_url  | Yes      | Public access URL (custom domain recommended)                             | `https://pub-XXXX.r2.dev`             |
 | region      | No       | S3 region (`auto` for R2, actual region for AWS S3, e.g., `us-east-1`)   | `auto`                                |
-| expire_days | No       | Days before uploaded files auto-delete (default `30`, `0` = keep forever) | `30`                                  |
+| expire_days | No       | Days before uploaded files auto-delete (default `30`; `0` = keep forever, and see the warning below) | `30`                     |
 
 > **Tip**: R2.dev URLs have rate limits. For production use, bind a custom domain to your bucket and use that as `public_url`.
 
@@ -87,7 +89,8 @@ The AI returns a link — click to view the rendered document in your browser.
 
 - **Anything you upload is publicly accessible** at the returned URL — never upload secrets, API keys, PII, or other sensitive content.
 - Your S3 credentials are stored **in plaintext** in `~/.md-web/config.json`. Keep this file private — don't commit it or share it.
-- **Use a dedicated bucket.** Uploads are namespaced under the `md-web/` key prefix and the auto-expiry rule is scoped to it, so the skill only ever expires its own files — a dedicated bucket further guarantees it never touches your other objects or lifecycle rules.
+- **Use a dedicated bucket.** Uploads are namespaced under the `md-web/` key prefix and the auto-expiry rule is scoped to it, so the skill only ever expires its own files. One exception, and it is why the dedicated bucket matters: `expire_days: 0` does not remove just this skill's rule, it deletes the bucket's **entire** lifecycle configuration, including rules you set yourself.
+- **Automatic expiry needs an Admin Read & Write token.** With an Object-Read-&-Write-only token the upload still succeeds and the rule is simply not set — a warning goes by in the output, and with `expire_days: 0` not even that. Set the rule in the dashboard instead if you keep the narrower token.
 
 ## File Structure
 

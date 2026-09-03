@@ -1,7 +1,7 @@
 ---
 name: md-web
-version: 1.1.0
-description: Render a markdown file as a beautiful, shareable web page in the browser instead of dumping long text in chat. Use when the user wants to preview, view, share, export, or publish markdown as a web page, wants a shareable link to content, or when you need to present long markdown without flooding the conversation. Uploads the file to the user's own S3-compatible storage bucket; the rendered page is publicly accessible via the returned URL.
+version: 1.1.1
+description: Use when the user wants to preview, view, share, export, or publish markdown as a web page, wants a shareable link to content, or when long markdown would flood the conversation and should be presented as a rendered page instead. Uploads the .md to the user's own S3-compatible bucket, where a bundled Docsify server renders it; the page is publicly accessible via the returned URL, so only use it when the user asks. Triggers on 做成网页 / 分享为链接 / 预览 markdown / 发布成页面 / 网页展示.
 tags: [markdown, web, docsify, s3, preview, share, publish, export]
 homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/md-web
 
@@ -47,7 +47,7 @@ node {SKILL_DIR}/upload.js <local-file> <remote-key>
 ```
 
 - `{SKILL_DIR}`: the base directory of this skill (shown at the top when skill is loaded)
-- `<remote-key>`: a descriptive lowercase name with hyphens (e.g., `api-docs.md`, `project-guide.md`). A timestamp is prepended automatically to avoid filename collisions.
+- `<remote-key>`: a descriptive lowercase name with hyphens (e.g., `api-docs.md`, `project-guide.md`). A timestamp is prepended automatically to avoid filename collisions, the extension is forced to `.md`, and the object lands under the `md-web/` prefix.
 - On first run, the script auto-detects and deploys Docsify server files. No manual setup needed.
 
 ### Step 4: Return the result
@@ -71,7 +71,7 @@ This only needs to happen once. On subsequent runs, `config.json` already exists
    - **public_url**: public access URL. If the user has a custom domain bound to the bucket, use that (e.g., `https://docs.example.com`); otherwise use the default R2.dev URL (e.g., `https://pub-XXXX.r2.dev`). **Recommend custom domain** for production use — R2.dev URLs have rate limits.
 3. Ask about optional settings:
    - **region**: S3 region. Use `auto` for Cloudflare R2, or the actual region for AWS S3 (e.g., `us-east-1`). Default is `auto`.
-   - **expire_days**: how many days before uploaded markdown files are automatically deleted from the bucket. Default is `30`. Set to `0` to keep files forever. The script sets an S3 lifecycle rule **scoped to the `md-web/` key prefix**, so only this skill's own uploads are affected — Docsify server files and any other objects in the bucket are never touched. **Note**: this requires the API token to have **Admin Read & Write** permission (not just Object Read & Write). If the token lacks permission, the script will warn but still upload normally — the user can set the lifecycle rule manually in the Cloudflare Dashboard instead.
+   - **expire_days**: how many days before uploaded markdown files are automatically deleted from the bucket. Default is `30`. Set to `0` to keep files forever — note that this **deletes the bucket's entire lifecycle configuration**, including rules you set yourself, which is why a dedicated bucket is recommended. The script sets an S3 lifecycle rule **scoped to the `md-web/` key prefix**, so only this skill's own uploads are affected — Docsify server files and any other objects in the bucket are never touched. **Note**: this requires the API token to have **Admin Read & Write** permission (not just Object Read & Write). If the token lacks permission, the script will warn but still upload normally — the user can set the lifecycle rule manually in the Cloudflare Dashboard instead.
 4. Write the config to `~/.md-web/config.json` (create the `~/.md-web/` directory if it doesn't exist). Use the user's home directory (`$HOME` on Unix, `%USERPROFILE%` on Windows):
 
 ```json
@@ -92,8 +92,6 @@ This only needs to happen once. On subsequent runs, `config.json` already exists
 
 - Do NOT generate HTML. Just upload the raw `.md` file — Docsify handles rendering.
 - Do NOT send markdown content to the chat unless upload fails.
-- `upload.js` uses only Node.js built-in modules (zero dependencies).
-- All Docsify assets (JS/CSS) are bundled locally — no external CDN dependency at runtime.
 
 ## External endpoints
 
@@ -109,6 +107,6 @@ This skill connects only to the S3 endpoint configured by the user in `config.js
 - Credentials (`access_key`, `secret_key`) are stored **in plaintext** in `~/.md-web/config.json` (outside the skill directory, safe from upgrades) and only sent to the user's own S3 endpoint for authentication. Protect this file — don't commit it or share it.
 - **Use a dedicated bucket.** Uploads live under the `md-web/` key prefix and the auto-expiry rule is scoped to it, but `expire_days: 0` clears the bucket's lifecycle config entirely — a dedicated bucket guarantees the skill never affects unrelated objects or lifecycle rules you set yourself.
 - No telemetry, analytics, or data collection by the skill itself.
-- `upload.js` uses only Node.js built-in modules — no third-party dependencies.
+- `upload.js` uses only Node.js built-in modules and all Docsify assets are bundled locally — no third-party dependencies, no CDN at runtime.
 
 By using this skill, markdown content is uploaded to **your own** S3-compatible storage bucket and made publicly accessible. No data is sent to the skill author or any third-party service. Only install if you trust the storage provider you configure.

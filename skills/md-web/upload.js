@@ -9,6 +9,14 @@ var os = require("node:os");
 
 var SCRIPT_DIR = __dirname;
 
+// Argument check first: loading the config exits when it is missing, so leaving this at
+// the bottom made the usage line unreachable for anyone who had not configured yet.
+var args = process.argv.slice(2);
+if (args.length < 2) {
+  console.log("Usage: node " + path.basename(process.argv[1]) + " <local-file> <remote-key>");
+  process.exit(1);
+}
+
 // ── User data dir: upgrade-safe location in home dir ──
 var USER_CONFIG_DIR = path.join(os.homedir(), ".md-web");
 var USER_CONFIG_PATH = path.join(USER_CONFIG_DIR, "config.json");
@@ -267,9 +275,14 @@ function setLifecycleRule() {
   var days = expireDays();
 
   if (days === 0) {
+    // Report the failure like the days > 0 branch does. Swallowing it meant a token
+    // without lifecycle permission produced no output at all here, so the bucket kept
+    // whatever expiry rule it already had while the config said there was none.
     return s3Fetch("DELETE", "/" + CONFIG.bucket, "lifecycle")
       .then(function () { console.log("  Lifecycle: no expiry"); })
-      .catch(function () {});
+      .catch(function (e) {
+        console.error("  Warning: could not clear the lifecycle rule — " + (e.message || e));
+      });
   }
 
   // Scope expiry to md-web's own uploads (the "md-web/" key prefix) only — never
@@ -371,20 +384,19 @@ function timestamp() {
 // rule (and any future cleanup) only ever touches md-web's own files.
 var UPLOAD_PREFIX = "md-web/";
 
+var DOC_EXTS = [".md", ".markdown", ".txt"];
+
 function addTimestamp(key) {
   var ext = path.extname(key);
   var base = key.slice(0, key.length - ext.length);
-  if (ext.toLowerCase() !== ".md") { ext = ".md"; }
-  return timestamp() + "-" + base + ext;
+  // Strip only an extension we recognise. path.extname() calls everything after the last
+  // dot an extension, so "v1.2-release-notes" reported ".2-release-notes" and dropping it
+  // shipped the document as "v1.md" — silently truncated, with a 200 on the URL to hide it.
+  if (DOC_EXTS.indexOf(ext.toLowerCase()) === -1) base = key;
+  return timestamp() + "-" + base + ".md";
 }
 
 // ── Main ──
-var args = process.argv.slice(2);
-if (args.length < 2) {
-  console.log("Usage: node " + path.basename(process.argv[1]) + " <local-file> <remote-key>");
-  process.exit(1);
-}
-
 var localPath = args[0];
 var remoteKey = UPLOAD_PREFIX + addTimestamp(args[1]);
 
