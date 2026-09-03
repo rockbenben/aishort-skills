@@ -1,12 +1,12 @@
 ---
 name: html-shot
-version: 1.1.3
+version: 1.1.4
 description: Use when a design has to become image assets through a real browser — an og:image or social preview card, an HTML/CSS or SVG design exported as PNG/JPEG/WebP, a screenshot of a page or of one element in it, or a favicon / app-icon set (.ico, .icns, apple-touch, PWA) for a site, Electron or Tauri app. Also use when a card's copy is CJK, emoji or mixed-script and bundling a font is not an option. Triggers on 生成 og 图 / 社交卡片 / 网页截图 / HTML 转图片 / favicon / 应用图标.
 tags: [og-image, social-card, html-to-image, svg-to-png, favicon, app-icon, screenshot, playwright, chromium]
 homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/html-shot
 
 metadata:
-  clawdbot:
+  openclaw:
     emoji: "📸"
     requires:
       bins: ["node"]
@@ -79,8 +79,12 @@ Two entry points, one engine:
    white. Ask the file instead (`sharp` ships with this skill):
 
    ```bash
-   node -e "require('{SKILL_DIR}/node_modules/sharp')('badge.png').stats().then(s=>console.log(s.isOpaque?'NO alpha — the page paints its own background':'transparent'))"
+   node -e "require(process.argv[1])(process.argv[2]).stats().then(s=>console.log(s.isOpaque?'NO alpha — the page paints its own background':'transparent'))" {SKILL_DIR}/node_modules/sharp badge.png
    ```
+
+   Both paths go in as arguments, not spliced into the quoted JS: inside a JS string a Windows
+   path is a run of escape sequences (`\node_modules` begins with a newline), and the spliced
+   form throws `Cannot find module` on every backslash path.
 
 ## First run (install the engine, once)
 
@@ -93,11 +97,12 @@ when the directory is reached through a symlink (a checkout linked into the agen
 directory), `--prefix` rewrites `package-lock.json` with absolute paths. The Chromium step is instant if
 the browser is already in Playwright's shared global cache.
 
-**Playwright ships Chromium for** Debian 11–13, Ubuntu 18.04–26.04 (x64 and arm64),
-macOS 10.13+ (Intel and Apple silicon), and Windows x64. There is **no musl build**, so
-Alpine images (`node:*-alpine`) cannot run this — use a glibc base such as `node:22-slim`
-in CI. (`sharp` does have musl builds, so the install succeeds and only the browser launch
-fails, which reads like a mystery.)
+**Playwright's supported platforms** (its own system-requirements list; older releases are
+untested and the browser may not launch): Windows 11+ / Windows Server 2019+ / WSL,
+macOS 14+, and Debian 12–13 / Ubuntu 22.04–26.04 on x86-64 or arm64. There is **no musl
+build**, so Alpine images (`node:*-alpine`) cannot run this — use a glibc base such as
+`node:22-slim` in CI. (`sharp` does have musl builds, so the install succeeds and only the
+browser launch fails, which reads like a mystery.)
 
 **On Linux** (servers, containers, WSL, CI) two extra things are needed — macOS and Windows
 have both already:

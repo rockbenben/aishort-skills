@@ -34,7 +34,10 @@
   YOU CANNOT CHECK THIS BY EYE: every image viewer paints transparent pixels white, so a
   mark that kept its background looks identical to one that dropped it. Ask the file:
 
-    node -e "require('{SKILL_DIR}/node_modules/sharp')('icon.png').stats().then(s=>console.log(s.isOpaque?'NO alpha':'transparent'))"
+    node -e "require(process.argv[1])(process.argv[2]).stats().then(s=>console.log(s.isOpaque?'NO alpha':'transparent'))" {SKILL_DIR}/node_modules/sharp icon.png
+
+  (Both paths are arguments on purpose: spliced into the quoted JS, a Windows path's
+   backslashes are read as escape sequences and the require fails.)
 
   One thing transparency does NOT survive: apple-touch-icon. iOS composites alpha onto black,
   so that one file must be flattened — icons.mjs does it for you, onto --bg.
