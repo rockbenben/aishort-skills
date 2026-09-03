@@ -10,7 +10,7 @@ electron/
   resolvePath.js      static-asset resolver    (pure)  + resolvePath.test.js
   store.js            JSON store in userData   (pure)  + store.test.js
   locale.js           startUrl/parseLocale/trackLocale (pure)  + locale.test.js
-  window-state.js     window bounds keeper     (pure)
+  window-state.js     window bounds keeper     (pure)  + window-state.test.js
   protocol.js         app:// scheme            (electron)
   tray.js             tray + close-to-tray     (electron)
   main.js             entry — wires everything (electron)
@@ -34,7 +34,14 @@ build/icon.png        (≥256×256 square; reuse public/logo.png)
   // devDependencies: electron, electron-builder  (yarn add -D electron electron-builder)
 }
 ```
-**List the test files explicitly** — the tempting `node --test electron/*.test.js` is a trap that fails in CI: PowerShell (GitHub's default Windows shell) does **not** expand the `*` glob, and `node --test`'s own glob support only exists on Node ≥ 21, so the literal `electron/*.test.js` is passed through and matches nothing. (CI now uses `node-version: lts/*`, currently ≥ 21, so Node itself could expand it — but an explicit list stays correct on every shell and Node version, so prefer it.) `node --test electron` / `node --test electron/` are also wrong — Node tries to load `electron` as a module/entry, not search the dir. An explicit list works on every Node version and shell; add new test files to it as you create them.
+**Installing no longer fetches the binary.** Since Electron 43 the package has no
+`postinstall` script — the runtime is downloaded the first time something actually runs it,
+so `yarn install` is fast and quiet and the first `yarn electron:dev` pauses to fetch ~100 MB
+instead. `require("electron")` still returns a usable path: the package's entry point
+downloads on demand before handing it over, so the dev launcher below needs no change. In CI
+the fetch lands inside `yarn electron:build`, not `yarn install`.
+
+**List the test files explicitly** — the tempting `node --test electron/*.test.js` is a trap that fails in CI: PowerShell, GitHub's default Windows shell, does **not** expand the `*` glob, so the literal `electron/*.test.js` reaches `node --test` and matches nothing. `node --test electron` / `node --test electron/` are also wrong — Node tries to load `electron` as a module/entry, not search the dir. An explicit list works on every Node version and shell; add new test files to it as you create them.
 
 ## Pure modules (no `require("electron")` → unit-testable with `node --test`)
 
@@ -53,7 +60,16 @@ const path = require("path");
 // Pure: map a request pathname to a file path inside outDir.
 // `exists` is injected so this is testable without touching the real FS.
 function resolveAssetPath(outDir, pathname, exists) {
-  let rel = decodeURIComponent(pathname).replace(/^\/+/, "");
+  // decodeURIComponent throws on a malformed escape ("/%", "/a%zz"), and Chromium leaves a
+  // lone % in a standard-scheme path uncanonicalised, so this IS reachable. The throw is
+  // synchronous, so protocol.js's .catch on net.fetch never sees it — it would surface as
+  // an unhandled protocol error and a blank window. Treat undecodable as not-found.
+  let rel;
+  try {
+    rel = decodeURIComponent(pathname).replace(/^\/+/, "");
+  } catch {
+    return path.join(outDir, "404.html");
+  }
   if (rel === "") rel = "index.html";
 
   // Normalize, then enforce containment: bail to 404 if the path escapes outDir.
@@ -140,7 +156,16 @@ function createStore(dir, filename = "app-state.json") {
       return data[key] !== undefined ? data[key] : fallback;
     },
     set(key, value) {
-      if (data[key] === value) return; // skip redundant writes (same locale re-set on every in-page nav)
+      // Compare by value, not reference: windowState is a fresh object literal on every
+      // resize/move event, so `===` never matched it and each drag frame paid a synchronous
+      // writeFileSync on the main thread. Strings (the locale) deduped fine either way.
+      // Wrapped because JSON.stringify throws on a circular value: skipping a redundant
+      // write must never be the thing that takes down the main process.
+      try {
+        if (JSON.stringify(data[key]) === JSON.stringify(value)) return;
+      } catch {
+        // not comparable — fall through and write
+      }
       data[key] = value;
       try {
         fs.mkdirSync(dir, { recursive: true });
@@ -507,13 +532,18 @@ win:
   target: dir               # unpacked folder: runs TextDiff.exe directly, fast startup
   icon: build/icon.png
 ```
-`target: dir` → `dist-electron/win-unpacked/` (distribute the folder; zip for transport). Swap to `target: portable` only if you must have a single file — it re-extracts to %TEMP% every launch (slower). Add `!build/icon.png` to `.gitignore` if a stray `/build` rule (CRA leftover) would ignore the committed icon.
+`target: dir` → `dist-electron/win-unpacked/` (distribute the folder; zip for transport). Swap to `target: portable` only if you must have a single file — it re-extracts to %TEMP% every launch (slower). If a stray `/build` rule (a CRA leftover) would ignore the committed icon, note that `!build/icon.png` **cannot** rescue it — git will not re-include a file whose parent directory is excluded. Exclude the directory's *contents* instead: `/build/*` followed by `!/build/icon.png`.
 
 ### .gitignore additions
 ```
 dist-electron/
 out/
-!build/icon.png
+```
+Only add the `build/` pair below if some existing rule already ignores that directory —
+and note the ordering, because `!build/icon.png` under a plain `/build` rule does nothing:
+```
+/build/*
+!/build/icon.png
 ```
 
 ## CI
@@ -531,10 +561,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: lts/* # track current LTS; electron@42+ needs node >= 22.12
+          node-version: lts/* # track current LTS; current Electron needs node >= 22.12
           cache: yarn
       - run: yarn install --frozen-lockfile
       - run: yarn test:electron
@@ -551,7 +581,7 @@ jobs:
         run: Compress-Archive -Path dist-electron/win-unpacked/* -DestinationPath dist-electron/TextDiff-${{ github.ref_name }}-win.zip
       - name: Publish release on tag
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist-electron/*.zip
 ```
@@ -568,11 +598,11 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: feat/electron-desktop   # <-- pin to the branch that has electron/. Update if it merges/renames.
-      - uses: actions/setup-node@v6
-        with: { node-version: lts/*, cache: yarn } # electron@42+ needs node >= 22.12
+      - uses: actions/setup-node@v7
+        with: { node-version: lts/*, cache: yarn } # current Electron needs node >= 22.12
       - run: yarn install --frozen-lockfile
       - run: yarn test:electron
       - run: yarn electron:build
