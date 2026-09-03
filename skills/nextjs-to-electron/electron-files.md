@@ -34,8 +34,9 @@ build/icon.png        (≥256×256 square; reuse public/logo.png)
   // devDependencies: electron, electron-builder  (yarn add -D electron electron-builder)
 }
 ```
-**Installing no longer fetches the binary.** Since Electron 43 the package has no
-`postinstall` script — the runtime is downloaded the first time something actually runs it,
+**Installing no longer fetches the binary.** Since Electron 42 the package has no
+`postinstall` script (v41.0.0 still ships `"postinstall": "node install.js"`; v42.0.0 does
+not) — the runtime is downloaded the first time something actually runs it,
 so `yarn install` is fast and quiet and the first `yarn electron:dev` pauses to fetch ~100 MB
 instead. `require("electron")` still returns a usable path: the package's entry point
 downloads on demand before handing it over, so the dev launcher below needs no change. In CI

@@ -1,12 +1,12 @@
 ---
 name: nextjs-to-electron
-version: 1.1.3
+version: 1.1.4
 description: Use when converting or migrating a Next.js (App Router) web app into an Electron desktop app — packaging a static-export site as a Windows desktop/portable/unpacked build, especially for fully-offline or intranet machines that lack the WebView2 runtime (where Tauri fails), or adding language persistence, window-state, single-instance, system tray, or GitHub Actions Electron builds. Also matches "nextjs2electron". Triggers on Electron 桌面版 / 离线内网机器 / 没有 WebView2 / 打包成 exe.
 tags: [electron, nextjs, desktop, app-router, static-export, offline, next-intl, electron-builder, github-actions, webview2]
 homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/nextjs-to-electron
 
 metadata:
-  clawdbot:
+  openclaw:
     emoji: "⚛️"
     requires:
       bins: ["node"]
