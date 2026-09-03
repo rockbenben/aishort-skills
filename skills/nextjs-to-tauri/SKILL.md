@@ -1,12 +1,12 @@
 ---
 name: nextjs-to-tauri
-version: 1.1.4
+version: 1.1.5
 description: Use when converting or migrating a Next.js 16 (App Router) web app into a Tauri 2 desktop app — packaging a static-export site as a desktop/portable .exe, adding auto-update, language persistence, window-state, single-instance, or system tray, or setting up GitHub Actions Tauri builds. Covers next-intl i18n static-export gotchas (the trailingSlash white-screen), updater signing keys, and cross-platform CI. Triggers on 打包成桌面应用 / 桌面版 / 生成 exe / 迁移到 Tauri.
 tags: [tauri, nextjs, desktop, app-router, static-export, auto-update, next-intl, github-actions]
 homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/nextjs-to-tauri
 
 metadata:
-  clawdbot:
+  openclaw:
     emoji: "🦀"
     requires:
       bins: ["node"]
@@ -140,4 +140,4 @@ The code migration is done by the agent; these steps need the human and break th
 
 ## What to expect
 
-A typical multi-locale next-intl tool migrates in a single branch: React untouched, a ~3–10 MB exe (vs ~120 MB for Electron), fully offline, CI-only builds across Windows/macOS/Linux plus a portable exe. The frontend build verifies locally; Rust compiles in CI.
+A typical multi-locale next-intl tool migrates in a single branch: React untouched, a ~3–10 MB exe (vs ~150 MB for Electron), fully offline, CI-only builds across Windows/macOS/Linux plus a portable exe. The frontend build verifies locally; Rust compiles in CI.
