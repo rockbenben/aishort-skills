@@ -1,12 +1,12 @@
 ---
 name: md-web
-version: 1.1.1
+version: 1.1.2
 description: Use when the user wants to preview, view, share, export, or publish markdown as a web page, wants a shareable link to content, or when long markdown would flood the conversation and should be presented as a rendered page instead. Uploads the .md to the user's own S3-compatible bucket, where a bundled Docsify server renders it; the page is publicly accessible via the returned URL, so only use it when the user asks. Triggers on 做成网页 / 分享为链接 / 预览 markdown / 发布成页面 / 网页展示.
 tags: [markdown, web, docsify, s3, preview, share, publish, export]
 homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/md-web
 
 metadata:
-  clawdbot:
+  openclaw:
     emoji: "🌐"
     requires:
       bins: ["node"]

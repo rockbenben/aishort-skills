@@ -16,9 +16,9 @@ clawhub install md-web
 npx skills add rockbenben/aishort-skills
 ```
 
-Or install manually — clone this repo into your agent's skills directory: `~/.claude/skills/`
-for Claude Code, `~/.agents/skills/` for the cross-runtime convention Codex and Gemini CLI
-also read, or wherever your agent keeps them.
+Or install manually — clone this repo and copy (or symlink) `skills/md-web/` into your agent's
+skills directory: `~/.claude/skills/` for Claude Code, `~/.agents/skills/` for the cross-runtime
+convention Codex and Gemini CLI also read, or wherever your agent keeps them.
 
 ## Quick Start
 

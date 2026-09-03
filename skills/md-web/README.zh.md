@@ -16,8 +16,9 @@ clawhub install md-web
 npx skills add rockbenben/aishort-skills
 ```
 
-或手动安装 —— 将本仓库克隆到 agent 的 skills 目录：Claude Code 为 `~/.claude/skills/`，
-Codex 与 Gemini CLI 等通用约定为 `~/.agents/skills/`，其他 agent 按各自目录放即可。
+或手动安装 —— clone 本仓库，把 `skills/md-web/` 拷贝（或软链）进 agent 的 skills 目录：
+Claude Code 为 `~/.claude/skills/`，Codex 与 Gemini CLI 等通用约定为 `~/.agents/skills/`，
+其他 agent 按各自目录放即可。
 
 ## 快速开始
 
