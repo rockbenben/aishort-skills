@@ -1,7 +1,7 @@
 ---
 name: html-shot
-version: 1.1.4
-description: Use when a design has to become image assets through a real browser — an og:image or social preview card, an HTML/CSS or SVG design exported as PNG/JPEG/WebP, a screenshot of a page or of one element in it, or a favicon / app-icon set (.ico, .icns, apple-touch, PWA) for a site, Electron or Tauri app. Also use when a card's copy is CJK, emoji or mixed-script and bundling a font is not an option. Triggers on 生成 og 图 / 社交卡片 / 网页截图 / HTML 转图片 / favicon / 应用图标.
+version: 1.1.5
+description: Use when turning HTML, a URL or SVG into images — og:image, social card, screenshot, favicon or app-icon set. Triggers on 生成 og 图 / 网页截图 / favicon / 应用图标.
 tags: [og-image, social-card, html-to-image, svg-to-png, favicon, app-icon, screenshot, playwright, chromium]
 homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/html-shot
 

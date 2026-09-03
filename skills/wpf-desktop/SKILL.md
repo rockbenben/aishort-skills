@@ -1,13 +1,14 @@
 ---
 name: wpf-desktop
-version: 1.0.1
-description: Use when building, debugging, or releasing a WPF desktop app on .NET — a tray utility, a portable single-file exe, a Windows tool with hotkeys or multi-monitor logic. Reach for it on dependency and publish-profile choices, a white flash on open, a window that will not come to front, DPI maths wrong on a second monitor, controls crushed by long translations, slow startup, or a tagged release pipeline. Triggers on .csproj/.xaml files, net10.0-windows, UseWPF, or WPF、托盘应用、桌面小工具、单文件 exe. Reference files are Chinese; SKILL.md is English.
+version: 1.0.2
+description: Use when building, debugging or releasing a WPF desktop app on .NET — tray, single-file exe, DPI, startup, release CI. 托盘应用 / 单文件 exe. Refs are Chinese.
 tags: [wpf, dotnet, csharp, desktop, windows, tray, single-file, xaml, github-actions, winget]
 homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/wpf-desktop
 
 metadata:
   openclaw:
     emoji: "🪟"
+    os: ["win32"]
     files:
       - project-setup.md
       - pitfalls.md

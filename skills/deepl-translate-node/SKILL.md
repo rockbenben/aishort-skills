@@ -1,7 +1,7 @@
 ---
 name: deepl-translate-node
-version: 1.1.5
-description: Use when translating text and you are NOT confident in your own rendering — proper nouns with official localized forms, ambiguous phrasing, legal/medical/financial/technical terminology, idioms, low-resource or distant language pairs, or anything the user will publish, sign or send where a mistranslation carries real cost. Also use when the user explicitly asks to "用 DeepL 翻译" / "translate with DeepL". Needs a DEEPL_API_KEY (Free tier by default; Pro via DEEPL_API_HOST).
+version: 1.1.6
+description: Use when a translation must be right and you are not sure — proper nouns, legal/medical/technical terms, idioms, distant language pairs. Also 用 DeepL 翻译.
 tags: [deepl, translate, translation, i18n, localization, terminology, machine-translation]
 homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/deepl-translate-node
 
@@ -10,6 +10,12 @@ metadata:
     emoji: "🔤"
     requires:
       bins: ["node"]
+      env: ["DEEPL_API_KEY"]
+    primaryEnv: DEEPL_API_KEY
+    envVars:
+      - name: DEEPL_API_HOST
+        required: false
+        description: Point at api.deepl.com for a Pro key; the Free host is the default.
     files:
       - translate.mjs
 ---

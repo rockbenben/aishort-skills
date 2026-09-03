@@ -1,7 +1,7 @@
 ---
 name: nextjs-to-tauri
-version: 1.1.5
-description: Use when converting or migrating a Next.js 16 (App Router) web app into a Tauri 2 desktop app — packaging a static-export site as a desktop/portable .exe, adding auto-update, language persistence, window-state, single-instance, or system tray, or setting up GitHub Actions Tauri builds. Covers next-intl i18n static-export gotchas (the trailingSlash white-screen), updater signing keys, and cross-platform CI. Triggers on 打包成桌面应用 / 桌面版 / 生成 exe / 迁移到 Tauri.
+version: 1.1.6
+description: Use when packaging a Next.js 16 App Router app as a Tauri 2 desktop app with static export, auto-update, tray and CI. Triggers on 打包成桌面应用 / 生成 exe.
 tags: [tauri, nextjs, desktop, app-router, static-export, auto-update, next-intl, github-actions]
 homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/nextjs-to-tauri
 
