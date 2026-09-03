@@ -97,6 +97,9 @@ clawhub install wpf-desktop
 ```
 
 - **Needs:** .NET 10 SDK on Windows; GitHub Actions for the release pipeline.
+- **Language:** `SKILL.md` is English; the four reference files behind it are **Chinese**.
+  Agents route by the symptom headings either way, but a human who does not read Chinese
+  gets the index rather than the write-ups.
 - **Reference:** [`SKILL.md`](skills/wpf-desktop/SKILL.md)
 
 ### [nextjs-to-tauri](skills/nextjs-to-tauri/) — Next.js 16 → Tauri 2 desktop app

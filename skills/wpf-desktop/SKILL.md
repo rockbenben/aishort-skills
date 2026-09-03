@@ -1,7 +1,7 @@
 ---
 name: wpf-desktop
 version: 1.0.0
-description: Use when building, debugging, or releasing a WPF desktop app on .NET (a tray utility, a portable single-file exe, a Windows tool with hotkeys or multi-monitor logic) — covers dependency choices, publish profiles, single-instance and startup, DPI and window behaviour, layout that survives long translations, startup-performance profiling, CI smoke/screenshot checks, and a GitHub Actions release pipeline with SHA256 sums and winget submission. Triggers on .csproj/.xaml files, net10.0-windows, UseWPF, or the user saying WPF、托盘应用、桌面小工具、单文件 exe.
+description: Use when building, debugging, or releasing a WPF desktop app on .NET — a tray utility, a portable single-file exe, a Windows tool with hotkeys or multi-monitor logic. Reach for it on dependency and publish-profile choices, a white flash on open, a window that will not come to front, DPI maths wrong on a second monitor, controls crushed by long translations, slow startup, or a tagged release pipeline. Triggers on .csproj/.xaml files, net10.0-windows, UseWPF, or WPF、托盘应用、桌面小工具、单文件 exe. Reference files are Chinese; SKILL.md is English.
 tags: [wpf, dotnet, csharp, desktop, windows, tray, single-file, xaml, github-actions, winget]
 homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/wpf-desktop
 
@@ -18,6 +18,12 @@ metadata:
 # WPF Desktop Apps
 
 A selection-and-pitfalls checklist for tray-resident WPF utilities. Selections track current official releases and docs — **verify versions before use** (rule 1 below). The pitfalls are field-tested, each with the measurement that exposed it.
+
+**Language:** this page is English, the four reference files it points to are Chinese.
+That is where the actual content lives — the symptom write-ups, the code and its
+comments — so a reader who does not read Chinese gets the index and not the substance.
+The lookup keys are the Chinese section headings, quoted here in 「」, so an agent can
+route to the right file either way.
 
 ## When to use
 
