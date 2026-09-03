@@ -12,6 +12,7 @@ Each skill is a self-contained directory under [`skills/`](skills/).
 clawhub install md-web
 clawhub install deepl-translate-node
 clawhub install html-shot
+clawhub install wpf-desktop
 clawhub install nextjs-to-tauri
 clawhub install nextjs-to-electron
 
@@ -19,8 +20,9 @@ clawhub install nextjs-to-electron
 npx skills add rockbenben/aishort-skills
 ```
 
-Or clone this repo and copy (or symlink) a skill directory into your agent's skills
-folder, e.g. `~/.claude/skills/md-web`.
+Or clone this repo and copy (or symlink) a skill directory into your agent's skills folder —
+`~/.claude/skills/` for Claude Code, `~/.agents/skills/` for the cross-runtime convention
+Codex and Gemini CLI also read, or wherever your agent keeps them.
 
 ## Skills
 
@@ -77,6 +79,26 @@ clawhub install html-shot
 - **Setup:** [English](skills/html-shot/README.md) · [中文](skills/html-shot/README.zh.md)
 - **Reference:** [`SKILL.md`](skills/html-shot/SKILL.md) · starters: [`template.example.html`](skills/html-shot/template.example.html) (og card) · [`icon.example.html`](skills/html-shot/icon.example.html) (transparent icon / mark)
 
+### [wpf-desktop](skills/wpf-desktop/) — WPF desktop apps on .NET
+
+Build, debug and ship a **native** Windows desktop tool (tray utility, portable single-file
+`.exe`) in WPF — no web stack involved. Covers which dependencies are worth adding (most are
+not), why publish settings belong in a `pubxml` and never the `csproj`, the window behaviour
+WPF gets wrong by default (DPI awareness, dark title bar, the white flash on open), and a
+tag-triggered GitHub Actions release with SHA256 sums, artifact attestation and winget
+submission. The value is the pitfall list written symptom-first, each one field-tested rather
+than quoted: layout containers that silently drop controls under long translations, a first
+library call that costs ~770 ms of startup, and the probes that turn "sometimes it doesn't
+work" into a score you can act on — offscreen screenshot sweeps across languages and DPI,
+phase timers, pixel sampling, and driving the UI from outside the process.
+
+```bash
+clawhub install wpf-desktop
+```
+
+- **Needs:** .NET 10 SDK on Windows; GitHub Actions for the release pipeline.
+- **Reference:** [`SKILL.md`](skills/wpf-desktop/SKILL.md)
+
 ### [nextjs-to-tauri](skills/nextjs-to-tauri/) — Next.js 16 → Tauri 2 desktop app
 
 Wrap a client-side Next.js 16 (App Router) app in a thin Tauri 2 native shell — ship a
@@ -116,6 +138,7 @@ skills/
 ├── md-web/                # Markdown → shareable web page (S3 + Docsify)
 ├── deepl-translate-node/  # Confidence-gated DeepL translation fallback
 ├── html-shot/             # HTML/SVG/URL → og:image, social card, screenshot, favicon/app-icon set
+├── wpf-desktop/           # WPF desktop apps on .NET — setup, pitfalls, dev switches, release CI
 ├── nextjs-to-tauri/       # Next.js 16 → Tauri 2 desktop app migration
 └── nextjs-to-electron/    # Next.js → Electron desktop app (offline / no-WebView2)
 assets/               # README images — kept out of skills/ so they aren't installed
