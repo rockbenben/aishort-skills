@@ -1,11 +1,27 @@
 # Template: .github/workflows/desktop-build.yml
 # Cross-platform Tauri build with signing, a draft release carrying latest.json,
 # and a portable Windows exe. Replace <App Title>/<AppName>. Pin action versions to
-# whatever the SKILL.md "verify latest" step reports (these were current 2026-06).
+# whatever the SKILL.md "verify latest" step reports (these were current 2026-09).
 #
 # Secrets required for auto-update: TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD if the key
 # has one). GITHUB_TOKEN is built in. Remember: the release is a DRAFT — un-draft it
 # to actually roll the update out (releases/latest ignores drafts).
+#
+# tauri-action v1 traps worth knowing before your first re-run:
+#  * A draft run will not adopt a published release. With releaseDraft: true the action
+#    scans the release list for a DRAFT carrying this tag; on finding a published one it
+#    warns and falls through to CREATING a release for the same tag, which GitHub then
+#    rejects. So re-running a tag you have un-drafted needs the release deleted first,
+#    and the manual path must not pass a tagName at all — see below.
+#  * It rewrites an existing release's name and body only when that release is already
+#    PUBLISHED (updating a draft would move its tag and duplicate it). In the normal draft
+#    flow the first matrix job creates the draft and the other three only upload into it,
+#    so generated notes are written once, not once per job.
+#  * Two inputs look tempting and mostly are not: uploadPlainBinary is documented for
+#    `--no-bundle` builds only, so it does not replace the portable-exe steps below when
+#    you also ship installers; updaterJsonPreferNsis switches latest.json's
+#    `windows-x86_64` key from the .msi to the NSIS setup.exe, which changes what already
+#    shipped users receive on their next update — decide that on its own, not in passing.
 name: Build Desktop App
 
 on:
@@ -31,7 +47,7 @@ jobs:
             args: ""
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -40,7 +56,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libgtk-3-dev wget file
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: lts/*
           cache: yarn
@@ -73,40 +89,88 @@ jobs:
           yarn update-version
           yarn install --frozen-lockfile
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
+        id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: v__VERSION__
-          releaseName: "<App Title> v__VERSION__"
+          # Tag push -> create or fill the draft release. Manual run -> build only:
+          # with no tagName the action skips every upload (its README's "just build"
+          # mode), so testing the pipeline cannot touch a real release.
+          tagName: ${{ github.event_name == 'push' && 'v__VERSION__' || '' }}
+          releaseName: ${{ github.event_name == 'push' && '<App Title> v__VERSION__' || '' }}
+          # Prepended to GitHub's generated changelog; releaseName still wins for the title.
           releaseBody: "See the assets to download and install."
+          generateReleaseNotes: true
           releaseDraft: true
           prerelease: false
+          # A manual run uploads to no release, so the bundles are only reachable as
+          # workflow artifacts. On a tag push the release already carries them.
+          uploadWorkflowArtifacts: ${{ github.event_name != 'push' }}
+          # Four platforms x a dozen assets: one flaky upload otherwise costs a whole
+          # re-run, which v1's draft-matching rule makes more expensive than it was.
+          retryAttempts: 2
+          # One naming scheme for every asset. Without this Tauri's own names win, and a
+          # productName containing a space comes out dotted (Subtitle Translator ->
+          # Subtitle.Translator_3.1.1_x64-setup.exe) while the portable exe below, named
+          # from mainBinaryName, does not — three spellings of one app on one page.
+          # [ext] is multi-part aware (.app.tar.gz, .msi.sig), and latest.json resolves its
+          # download URLs through this same pattern, so the updater follows automatically.
+          # [_setup] is what separates the NSIS installer from the portable exe: both .exe.
+          # Drop this line to go back to the Tauri CLI's names.
+          releaseAssetNamePattern: "[mainBinaryName]_[version]_[arch][_setup][ext]"
           args: ${{ matrix.args }}
 
       # Portable "green" exe (Windows only): the raw self-contained binary tauri
       # builds anyway. No installer; needs the WebView2 runtime; does NOT self-update.
+      # Version comes from the action's appVersion output — the version tauri actually
+      # built with (tauri.conf.json, written by `yarn update-version`). Re-reading
+      # package.json here would name the file and pick the upload tag from a different
+      # source, so drift between the two would put the asset on the wrong release.
       - name: Stage portable Windows exe
         if: matrix.platform == 'windows-latest'
         shell: bash
+        env:
+          APP_VERSION: ${{ steps.tauri.outputs.appVersion }}
         run: |
-          VERSION=$(node -p "require('./package.json').version")
-          cp "src-tauri/target/release/<AppName>.exe" "<AppName>_${VERSION}_portable.exe"
-          echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
+          test -n "$APP_VERSION"
+          cp "src-tauri/target/release/<AppName>.exe" "<AppName>_${APP_VERSION}_x64_portable.exe"
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
 
       - name: Upload portable exe as workflow artifact
         if: matrix.platform == 'windows-latest'
         uses: actions/upload-artifact@v7
         with:
           name: portable-windows
-          path: <AppName>_${{ env.APP_VERSION }}_portable.exe
+          path: <AppName>_${{ env.APP_VERSION }}_x64_portable.exe
           if-no-files-found: error
 
       - name: Attach portable exe to the release
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-latest' && github.event_name == 'push'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "v${APP_VERSION}" "<AppName>_${APP_VERSION}_portable.exe" --clobber
+        run: gh release upload "v${APP_VERSION}" "<AppName>_${APP_VERSION}_x64_portable.exe" --clobber
+
+      # The pipeline ends in a manual step: the release is a DRAFT and the updater
+      # resolves `releases/latest`, which ignores drafts — so nothing reaches users until
+      # someone publishes it. Putting the link and that reminder in the run summary beats
+      # a note in a file nobody opens at the moment it matters. Skipped on manual runs,
+      # which create no release (the output is empty there).
+      - name: Link the draft release in the run summary
+        if: github.event_name == 'push' && steps.tauri.outputs.releaseHtmlUrl != ''
+        shell: bash
+        env:
+          RELEASE_URL: ${{ steps.tauri.outputs.releaseHtmlUrl }}
+          APP_VERSION: ${{ steps.tauri.outputs.appVersion }}
+        run: |
+          {
+            echo "### Draft release v${APP_VERSION}"
+            echo
+            echo "[Open the draft release]($RELEASE_URL)"
+            echo
+            echo 'This release is a **draft**. The updater resolves `releases/latest`, which'
+            echo 'ignores drafts — publish it or no client will ever be offered this version.'
+          } >> "$GITHUB_STEP_SUMMARY"

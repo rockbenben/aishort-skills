@@ -1,6 +1,6 @@
 # `src-tauri/` templates
 
-Copy-paste, then replace `<placeholders>`. Pin versions to whatever the "verify latest" step in SKILL.md reports — the numbers here were current 2026-06 and **will** drift.
+Copy-paste, then replace `<placeholders>`. Pin versions to whatever the "verify latest" step in SKILL.md reports — the numbers here were current 2026-09 and **will** drift.
 
 ---
 
@@ -27,6 +27,7 @@ Copy-paste, then replace `<placeholders>`. Pin versions to whatever the "verify 
         "label": "main",
         "title": "<App Title>",
         "url": "/en/",
+        "dragDropEnabled": false,
         "width": 1280,
         "height": 832,
         "minWidth": 720,
@@ -59,6 +60,7 @@ Copy-paste, then replace `<placeholders>`. Pin versions to whatever the "verify 
 ```
 
 - `url: "/en/"` — set to your default locale dir (single-locale apps: `"/"`). Why a trailing slash: SKILL.md gotcha #1.
+- `dragDropEnabled: false` — counter-intuitive but required if the page has a drop zone. Tauri's own schema says disabling it "is required to use HTML5 drag and drop on the frontend on Windows"; leave it at the default `true` and the webview swallows the drop, so a file-drop UI does nothing with no error. Drop this line only if nothing in the app accepts a dropped file.
 
 ---
 

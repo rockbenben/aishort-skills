@@ -1,16 +1,25 @@
 # Frontend integration templates
 
-Add only the pieces you need. JS deps (the plugins pull in `@tauri-apps/api` transitively — you don't need it as a direct dep):
+Put every file below in **one `src/app/desktop/` folder**, not spread across `utils/` and
+`hooks/`. Desktop-only code mixed into shared directories is easy to lose: in the reference
+app a repo-sync script that mirrors `src/app/{hooks,utils,…}` in overwrite mode deleted
+`useAutoUpdate.ts` and `useLanguagePreference.ts` outright, because they existed in the target
+and not the source. One folder nothing else claims also keeps the whole desktop layer greppable
+and deletable in one move.
+
+Add only the pieces you need. JS deps:
 
 ```bash
 yarn add @tauri-apps/plugin-opener@^2 @tauri-apps/plugin-updater@^2
 ```
 
+The plugins pull in `@tauri-apps/api` transitively, so you don't need it as a direct dep — **unless you add your own `#[tauri::command]`s**, whose `invoke` comes from there. Then add it, and reach for it with a dynamic `await import("@tauri-apps/api/core")` at the call site: a static import loads fine in a plain browser (it only throws when `invoke` runs) and quietly ships the whole package in the web bundle.
+
 All of this **no-ops outside a Tauri webview**, so it's safe to ship in the same bundle to the web. Rename the storage keys (`<app>_*`) per project.
 
 ---
 
-## `utils/externalLink.ts` — Tauri detection + system-browser links
+## `desktop/externalLink.ts` — Tauri detection + system-browser links
 
 A plain `.ts` (no JSX). `isTauriRuntime` is **synchronous** so click handlers can branch without awaiting (gotcha #4). Opening uses `@tauri-apps/plugin-opener` — the dedicated Tauri 2 plugin for opening URLs (the shell plugin is for spawning processes).
 
@@ -52,7 +61,7 @@ export const openExternalLink = async (url: string) => {
 
 ---
 
-## `utils/updater.ts` — check + download (defer install)
+## `desktop/updater.ts` — check + download (defer install)
 
 ```ts
 "use client";
@@ -82,31 +91,46 @@ export const checkForUpdates = async (): Promise<UpdateCheckResult> => {
 
 ---
 
-## `hooks/useAutoUpdate.ts` — startup + interval check, confirm-to-install, skip-version
+## `desktop/useAutoUpdate.ts` — startup + interval check, confirm-to-install, skip-version
 
 ```ts
 "use client";
 import { useEffect, useRef, useCallback } from "react";
-import { message, Modal } from "antd"; // swap for your UI lib's dialog/toast
-import { checkForUpdates, UpdateCheckResult } from "@/app/utils/updater";
-import { isTauri } from "@/app/utils/externalLink";
+import { App } from "antd"; // swap for your UI lib's dialog/toast
+import { checkForUpdates, UpdateCheckResult } from "./updater";
+import { isTauri } from "./externalLink";
 
 const SKIPPED_KEY = "<app>_skipped_version";
 
 export const useAutoUpdate = ({ startupDelay = 3000, checkInterval = 24 * 60 * 60 * 1000 } = {}) => {
+  // App.useApp(), not the static `Modal`/`message` imports: antd v5's static methods sit
+  // outside React context, so they miss the app's theme and locale (and antd warns about it).
+  const { modal, message } = App.useApp();
   const checkedStartup = useRef(false);
   const lastCheck = useRef(0);
 
   const confirm = useCallback((r: UpdateCheckResult) => {
-    Modal.confirm({
+    modal.confirm({
       title: "Update Available",
       content: `Version ${r.version} downloaded. Install now and restart?`,
       okText: "Install Now",
       cancelText: "Skip This Version",
-      onOk: () => r.install?.(),
+      // install() relaunches the app, so a resolved promise normally never returns. Catch it
+      // anyway: on the portable exe (gotcha #8) and other install-layout failures it REJECTS,
+      // and an uncaught rejection here leaves the user staring at a dialog that did nothing.
+      onOk: async () => {
+        message.loading({ content: "Installing update…", key: "installing", duration: 0 });
+        try {
+          await r.install?.();
+        } catch (e) {
+          console.error("Install failed:", e);
+          message.destroy("installing");
+          message.error("Installation failed. Please download the latest version manually.");
+        }
+      },
       onCancel: () => { try { localStorage.setItem(SKIPPED_KEY, r.version!); } catch {} },
     });
-  }, []);
+  }, [modal, message]);
 
   const run = useCallback(async () => {
     if (!(await isTauri())) return;
@@ -154,13 +178,13 @@ the launch-time redirect from fighting the switcher:
    effect — an effect races the startup redirect and can save the entry locale over the
    saved one.
 
-`hooks/useLanguagePreference.ts` (self-contained; Tauri-only so the web build is untouched):
+`desktop/useLanguagePreference.ts` (self-contained; Tauri-only so the web build is untouched):
 
 ```ts
 "use client";
 import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { isTauriRuntime } from "@/app/utils/externalLink";
+import { isTauriRuntime } from "./externalLink";
 
 const KEY = "<app>_preferred_language";
 export const setPreferredLanguage = (l: string) => { try { localStorage.setItem(KEY, l); } catch {} };
@@ -196,8 +220,8 @@ export function useLanguagePreference(valid: string[]) {
 **Language switcher** — plain soft nav, and save the choice here (not in an effect):
 
 ```ts
-import { setPreferredLanguage } from "@/app/hooks/useLanguagePreference";
-import { isTauriRuntime } from "@/app/utils/externalLink";
+import { setPreferredLanguage } from "@/app/desktop/useLanguagePreference";
+import { isTauriRuntime } from "@/app/desktop/externalLink";
 
 const onPick = (locale: string) => {
   if (isTauriRuntime()) setPreferredLanguage(locale);      // remember the explicit choice
@@ -218,9 +242,9 @@ Render inside `NextIntlClientProvider` (for `useLocale`/router) and your UI lib'
 ```tsx
 "use client";
 import { useEffect } from "react";
-import { useAutoUpdate } from "@/app/hooks/useAutoUpdate";
-import { useLanguagePreference } from "@/app/hooks/useLanguagePreference";
-import { isTauriRuntime, openExternalLink } from "@/app/utils/externalLink";
+import { useAutoUpdate } from "./useAutoUpdate";
+import { useLanguagePreference } from "./useLanguagePreference";
+import { isTauriRuntime, openExternalLink } from "./externalLink";
 import { routing } from "@/i18n/routing";
 
 export default function TauriIntegration() {
