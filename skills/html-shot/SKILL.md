@@ -1,12 +1,11 @@
 ---
 name: html-shot
-version: 1.1.5
+version: 1.1.6
 description: Use when turning HTML, a URL or SVG into images — og:image, social card, screenshot, favicon or app-icon set. Triggers on 生成 og 图 / 网页截图 / favicon / 应用图标.
-tags: [og-image, social-card, html-to-image, svg-to-png, favicon, app-icon, screenshot, playwright, chromium]
-homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/html-shot
 
 metadata:
   openclaw:
+    homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/html-shot
     emoji: "📸"
     requires:
       bins: ["node"]
@@ -87,6 +86,10 @@ Two entry points, one engine:
    form throws `Cannot find module` on every backslash path.
 
 ## First run (install the engine, once)
+
+Needs **Node ≥ 20.9** — that is `sharp`'s floor (`playwright` only asks for 20); `render.mjs`
+checks before importing and says so rather than failing with a module error that reads like a
+broken install.
 
 ```bash
 cd {SKILL_DIR} && npm install && node node_modules/playwright/cli.js install chromium
@@ -242,8 +245,12 @@ ship one, so leaving it out trades tens of KB (60 KB from the bundled `icon.exam
 for a 404 on every cold visit.
 
 **The run ends by printing the exact `<link>` lines to paste into `<head>`**, only for the
-files it actually wrote (`favicon.ico` needs no line; Next's App Router wires its files up by
-filename). Copy them from the output rather than writing them by hand.
+files it actually wrote, and with each href derived from `<outdir>`: a leading `public/` or
+`static/` is the served root and is stripped, so `static/img` yields `/img/favicon.svg`, while
+any other directory is assumed to *be* the root and says so. (`favicon.ico` needs no line when
+it lands at that root — elsewhere nothing auto-discovers it, and the output tells you to point
+the framework's favicon setting at it instead. Next's App Router wires its files up by
+filename.) Copy them from the output rather than writing them by hand.
 
 **Four rules are baked in, because each one is a silent failure otherwise:**
 

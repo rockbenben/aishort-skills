@@ -426,22 +426,42 @@ if (!written.length) {
 console.log(`✔ ${presetName} icon set → ${outDir}`);
 console.log(written.join("\n"));
 
+// <outdir> is a filesystem path and an href is a URL: they agree only once the directory the
+// target serves as its root is stripped off. `public/` and `static/` are roots fixed by
+// framework convention rather than by this project's config, so those the script can answer
+// for; any other path keeps "/" and says out loud that it assumed so. Printing a bare
+// "/favicon.svg" for the documented `static/img` case hands over a line that 404s.
+const SERVED_ROOTS = new Set(["public", "static"]);
+const outParts = outDirArg.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "").split("/");
+const urlBase = SERVED_ROOTS.has(outParts[0]) ? "/" + outParts.slice(1).join("/") : null;
+const href = (f) => (urlBase === null || urlBase === "/" ? "/" : urlBase + "/") + f;
+
 // The markup is part of the deliverable: the files do nothing until something points at them.
 // Only the files that were actually written get a line.
 if (preset.kind === "web" && presetName !== "next") {
   const links = [];
-  if (want.has("svg") && srcExt === ".svg") links.push(`  <link rel="icon" href="/${preset.svg}" type="image/svg+xml">`);
-  if (want.has("apple")) links.push(`  <link rel="apple-touch-icon" href="/${preset.apple}">`);
+  if (want.has("svg") && srcExt === ".svg") links.push(`  <link rel="icon" href="${href(preset.svg)}" type="image/svg+xml">`);
+  if (want.has("apple")) links.push(`  <link rel="apple-touch-icon" href="${href(preset.apple)}">`);
   if (links.length) {
-    console.log(`\nAdd to <head> (${preset.ico} is found at the site root on its own):`);
+    // Auto-discovery only reaches a favicon.ico that actually sits at the served root — and
+    // only one that was written at all, so `--only svg,apple` gets no claim about it.
+    const ico = !want.has("ico") ? "" : urlBase === "/"
+      ? ` (${preset.ico} is found at the site root on its own)`
+      : ` (${preset.ico} is not at the served root, so nothing auto-discovers it — point the framework's favicon setting at it)`;
+    console.log(`\nAdd to <head>${ico}:`);
     console.log(links.join("\n"));
   } else if (want.has("ico")) {
-    console.log(`\nNothing to wire up: browsers fetch /${preset.ico} from the site root by themselves.`);
+    console.log(urlBase === "/"
+      ? `\nNothing to wire up: browsers fetch /${preset.ico} from the site root by themselves.`
+      : `\nNo <head> line, but ${preset.ico} is not at the served root — point the framework's favicon setting at it.`);
   }
+  const shownDir = /^[.\\/]*$/.test(outDirArg) ? "the output directory" : outDirArg;
+  if ((links.length || want.has("ico")) && urlBase === null)
+    console.log(`\n(the hrefs above assume ${shownDir} is served at the site root; if it sits below one, prefix the path)`);
 }
 if (presetName === "next") console.log(`\nNothing to wire up: Next's App Router picks these up by filename.`);
 if (pwaWritten.length) {
-  const entry = ({ name, target }) => `{"src":"/${name}","sizes":"${target}x${target}","type":"image/png"}`;
+  const entry = ({ name, target }) => `{"src":"${href(name)}","sizes":"${target}x${target}","type":"image/png"}`;
   console.log(`\nIn the web manifest (these two must sit at the site root — in public/, not app/):`);
   console.log(`  "icons": [` + pwaWritten.map(entry).join(",\n            ") + `]`);
 }

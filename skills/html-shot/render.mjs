@@ -88,7 +88,7 @@ const INSTALL_HINT = `cd "${SKILL_DIR}" && npm install && node "${PW_CLI}" insta
 // or module error that reads like a broken install rather than "your Node is too old".
 const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
 if (nodeMajor < 20 || (nodeMajor === 20 && nodeMinor < 9)) {
-  console.error(`html-shot: needs Node >= 20.9 (sharp and playwright do); this is ${process.versions.node}.`);
+  console.error(`html-shot: needs Node >= 20.9 (sharp's floor; playwright asks for 20); this is ${process.versions.node}.`);
   process.exit(1);
 }
 
