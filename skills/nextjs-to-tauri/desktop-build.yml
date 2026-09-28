@@ -118,7 +118,9 @@ jobs:
           # from mainBinaryName, does not — three spellings of one app on one page.
           # [ext] is multi-part aware (.app.tar.gz, .msi.sig), and latest.json resolves its
           # download URLs through this same pattern, so the updater follows automatically.
-          # [_setup] is what separates the NSIS installer from the portable exe: both .exe.
+          # [_setup] expands to `_setup` on the NSIS bundle and to nothing on every other
+          # bundle, so the installer stays distinct from any other .exe tauri-action itself
+          # uploads. The portable exe below goes up through its own step, not this pattern.
           # Drop this line to go back to the Tauri CLI's names.
           releaseAssetNamePattern: "[mainBinaryName]_[version]_[arch][_setup][ext]"
           args: ${{ matrix.args }}

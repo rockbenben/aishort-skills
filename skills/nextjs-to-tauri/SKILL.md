@@ -1,12 +1,11 @@
 ---
 name: nextjs-to-tauri
-version: 1.1.6
+version: 1.1.7
 description: Use when packaging a Next.js 16 App Router app as a Tauri 2 desktop app with static export, auto-update, tray and CI. Triggers on 打包成桌面应用 / 生成 exe.
-tags: [tauri, nextjs, desktop, app-router, static-export, auto-update, next-intl, github-actions]
-homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/nextjs-to-tauri
 
 metadata:
   openclaw:
+    homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/nextjs-to-tauri
     emoji: "🦀"
     requires:
       bins: ["node"]

@@ -245,11 +245,11 @@ import { useEffect } from "react";
 import { useAutoUpdate } from "./useAutoUpdate";
 import { useLanguagePreference } from "./useLanguagePreference";
 import { isTauriRuntime, openExternalLink } from "./externalLink";
-import { routing } from "@/i18n/routing";
+import { routing } from "@/i18n/routing"; // next-intl only — no next-intl? delete this import…
 
 export default function TauriIntegration() {
   useAutoUpdate();
-  useLanguagePreference([...routing.locales]);
+  useLanguagePreference([...routing.locales]); // …and this line; language persistence is a next-intl feature
 
   useEffect(() => {
     if (!isTauriRuntime()) return;

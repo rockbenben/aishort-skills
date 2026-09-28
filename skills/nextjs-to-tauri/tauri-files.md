@@ -280,6 +280,6 @@ console.log(`Updated tauri.conf.json version -> ${pkg.version}`);
 ```
 src-tauri/target
 src-tauri/gen/schemas
+# the private signing key only; its .pub half is public and meant to be committed (gotcha #7)
 src-tauri/*.key
-src-tauri/*.key.pub
 ```
