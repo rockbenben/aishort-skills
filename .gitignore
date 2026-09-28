@@ -1,4 +1,5 @@
 config.json
 .deployed
 .claude/
+.qoder-credits/
 node_modules/
