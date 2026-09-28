@@ -9,11 +9,25 @@ var os = require("node:os");
 
 var SCRIPT_DIR = __dirname;
 
-// Argument check first: loading the config exits when it is missing, so leaving this at
-// the bottom made the usage line unreachable for anyone who had not configured yet.
+// Argument checks stay at the top for two reasons: loading the config exits when it is
+// missing, so a check below it is unreachable for anyone who has not configured yet; and a
+// run's first act is deploying the server files, so validating late meant a typo in the local
+// path cost a full round of uploads before failing with an ENOENT about the file alone.
 var args = process.argv.slice(2);
+var usage = "Usage: node " + path.basename(process.argv[1]) + " <local-file> <remote-key>";
 if (args.length < 2) {
-  console.log("Usage: node " + path.basename(process.argv[1]) + " <local-file> <remote-key>");
+  console.log(usage);
+  process.exit(1);
+}
+if (args[0].charAt(0) === "-") {
+  console.log(usage);
+  console.error('UPLOAD_FAILED: "' + args[0] + '" looks like an option; this script takes two positional arguments and has no flags.');
+  process.exit(1);
+}
+var localStat = null;
+try { localStat = fs.statSync(args[0]); } catch (e) { /* reported below */ }
+if (!localStat || !localStat.isFile()) {
+  console.error("UPLOAD_FAILED: not a readable file: " + args[0]);
   process.exit(1);
 }
 
@@ -194,9 +208,13 @@ function s3Fetch(method, resourcePath, query, payload, extraHeaders) {
         headers: reqHeaders,
       },
       function (res) {
-        var body = "";
-        res.on("data", function (c) { body += c; });
+        // Collect the chunks and decode once. Appending a Buffer to a string decodes each
+        // chunk separately, so a multibyte character straddling a chunk boundary turns into
+        // mojibake — and R2 echoes the key back in its error XML, where keys are not ASCII.
+        var chunks = [];
+        res.on("data", function (c) { chunks.push(c); });
         res.on("end", function () {
+          var body = Buffer.concat(chunks).toString("utf-8");
           if (res.statusCode >= 200 && res.statusCode < 300) resolve({ status: res.statusCode, body: body });
           else reject(new Error("HTTP " + res.statusCode + " — " + parseR2Error(body)));
         });
@@ -409,7 +427,9 @@ serverDeployed()
   })
   .then(function () {
     var name = remoteKey.replace(/\.md$/i, "");
-    console.log("\n" + CONFIG.public_url + "/index.html#/" + name);
+    // The key is percent-encoded on the way in (uriEncodePath in s3Fetch), so it has to be
+    // encoded on the way out too: a raw space ends the link the moment anything parses it.
+    console.log("\n" + CONFIG.public_url + "/index.html#/" + name.split("/").map(encodeURIComponent).join("/"));
     agent.destroy();
   })
   .catch(function (e) {

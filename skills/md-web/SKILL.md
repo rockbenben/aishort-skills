@@ -1,12 +1,11 @@
 ---
 name: md-web
-version: 1.1.3
+version: 1.1.4
 description: Use when markdown should become a shareable web page or link. Uploads to your S3 bucket and the URL is public, so only on request. 做成网页 / 分享为链接.
-tags: [markdown, web, docsify, s3, preview, share, publish, export]
-homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/md-web
 
 metadata:
   openclaw:
+    homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/md-web
     emoji: "🌐"
     requires:
       bins: ["node"]
@@ -36,19 +35,24 @@ Upload raw `.md` files to an S3-compatible storage bucket, where a pre-deployed 
 
 Check if `~/.md-web/config.json` exists (cross-platform: use the user's home directory). If it does NOT exist or has empty fields, follow the **Configuration** section below first.
 
+One exception: an older install kept `config.json` in the skill's own directory rather than in the home directory. If `~/.md-web/config.json` is absent but that legacy file is sitting next to `upload.js`, skip the wizard and run the upload — the script copies both it and `.deployed` into `~/.md-web/` and prints `Config migrated to:`. Running the wizard instead would ask the user for credentials that are already on disk.
+
 ### Step 2: Prepare the markdown file
 
-Either use an existing `.md` file, or write the content to a temporary file. Choose the temp path based on the current platform (e.g., `/tmp/` on Linux/macOS, system temp dir on Windows). Use whichever path works in the current shell environment.
+Either use an existing `.md` file, or write the content to a temporary file. Choose the temp path based on the current platform (e.g., `/tmp/` on Linux/macOS, `%TEMP%\` on Windows — note Git Bash does not expand `%TEMP%`, so use `$TEMP` there). Use whichever path works in the current shell environment.
+
+**Only the `.md` file itself is uploaded.** Relative image references (`![](diagram.png)`) will be broken on the page — tell the user to use absolute image URLs for documents that need pictures.
 
 ### Step 3: Upload via upload.js
 
 ```bash
-node {SKILL_DIR}/upload.js <local-file> <remote-key>
+node "{SKILL_DIR}/upload.js" <local-file> <remote-key>
 ```
 
-- `{SKILL_DIR}`: the base directory of this skill (shown at the top when skill is loaded)
-- `<remote-key>`: a descriptive lowercase name with hyphens (e.g., `api-docs.md`, `project-guide.md`). A timestamp is prepended automatically to avoid filename collisions, the extension is forced to `.md`, and the object lands under the `md-web/` prefix.
+- `{SKILL_DIR}`: the base directory of this skill (shown at the top when skill is loaded). Keep it inside quotes — a skills directory under a path with spaces breaks the shell otherwise.
+- `<remote-key>`: a short **ASCII, lowercase, hyphenated** name with no spaces (e.g., `api-docs.md`, `project-guide.md`) — use this even when the document's own title is Chinese, because the key is what appears in the public URL. A timestamp is prepended automatically to avoid filename collisions, the extension is forced to `.md`, and the object lands under the `md-web/` prefix.
 - On first run, the script auto-detects and deploys Docsify server files. No manual setup needed.
+- The server files are deployed once and then skipped while the bucket, the bundled files and `expire_days` are unchanged. If the deploy printed a lifecycle warning — `Warning: lifecycle —`, or `Warning: could not clear the lifecycle rule —` when `expire_days` is `0` — the token lacks Admin Read & Write: grant the permission, delete `~/.md-web/.deployed` and run again. Otherwise the rule is never applied, because the skip happens before the script tries.
 
 ### Step 4: Return the result
 
@@ -62,7 +66,7 @@ Example success output:
 
 This only needs to happen once. On subsequent runs, `config.json` already exists.
 
-1. Tell the user this skill needs an S3-compatible storage bucket with public access. Point them to `{SKILL_DIR}/README.md` for detailed setup instructions (Cloudflare R2 / AWS S3 / other S3-compatible services).
+1. Tell the user this skill needs an S3-compatible storage bucket with public access. Point them to `{SKILL_DIR}/README.md` for detailed setup instructions (Cloudflare R2 / AWS S3 / other S3-compatible services), or `{SKILL_DIR}/README.zh.md` when the user works in Chinese — the same document in the other language, with identical steps.
 2. Ask the user to provide these 5 required fields:
    - **access_key**: API access key ID
    - **secret_key**: API secret access key
