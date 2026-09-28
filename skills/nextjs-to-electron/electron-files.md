@@ -594,7 +594,7 @@ name: Build Electron (Windows unpacked)
 on:
   workflow_dispatch:        # manual "Run workflow" button (renders on the default branch)
   push:
-    tags: ["v*"]            # also build on tag (add the release steps from the full template above); pinned ref below builds the side branch
+    tags: ["v*"]            # also build on tag (add the release steps AND the `permissions: contents: write` block from the full template above — without that block the release step 403s); pinned ref below builds the side branch
 jobs:
   build:
     runs-on: windows-latest

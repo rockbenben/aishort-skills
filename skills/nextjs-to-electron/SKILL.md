@@ -1,12 +1,11 @@
 ---
 name: nextjs-to-electron
-version: 1.1.5
+version: 1.1.6
 description: Use when packaging a Next.js static export as a Windows Electron app, notably offline/intranet boxes with no WebView2. Triggers on Electron 桌面版 / 打包成 exe.
-tags: [electron, nextjs, desktop, app-router, static-export, offline, next-intl, electron-builder, github-actions, webview2]
-homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/nextjs-to-electron
 
 metadata:
   openclaw:
+    homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/nextjs-to-electron
     emoji: "⚛️"
     requires:
       bins: ["node"]
@@ -42,7 +41,7 @@ This playbook targets **Windows** (`--win dir`/`portable`, SmartScreen, WebView2
 
 ## Procedure
 
-Do these in order. Full code is in [electron-files.md](electron-files.md). The web source under `src/`, `messages/`, `next.config.*` stays untouched.
+Do these in order. Full code is in [electron-files.md](electron-files.md). The web source under `src/`, `messages/`, `next.config.*` stays untouched. Every command is written for **yarn**; in an npm or pnpm repo substitute the equivalent (`npm ci` for `yarn install --frozen-lockfile`) and match `setup-node`'s `cache:` to the lockfile you actually have — `cache: yarn` fails the job outright when there is no `yarn.lock`.
 
 1. **Confirm the export is client-side and check its shape.** `yarn build`, then `ls out/` — you'll see flat files (`index.html`, `en.html`, `zh.html`) and `_next/`. `trailingSlash: false` (flat files) is fine; the resolver handles both layouts (gotcha #2).
 
@@ -58,7 +57,7 @@ Do these in order. Full code is in [electron-files.md](electron-files.md). The w
 
 6. **Package** (gotcha #6). `electron-builder.yml`: `extraResources` maps `out → out` and `build/icon.png → icon.png`; `main.js` reads them at `process.resourcesPath/out` and `/icon.png` when packaged. Choose target: `dir` (unpacked folder — runs `<AppName>.exe` directly, fast) vs `portable` (self-extractor, re-unzips to %TEMP% every launch, slower) — gotcha #11.
 
-7. **CI** (`.github/workflows/electron.yml`): `windows-latest` → setup-node → `yarn install --frozen-lockfile` → `yarn test:electron` → `yarn electron:build` → upload the build as an artifact. If the desktop work lives on a side branch, host the workflow **on the default branch** with its checkout pinned by `ref:` (gotcha #10). To also attach the build to a GitHub Release — e.g. alongside a Tauri release in the same tag — derive both the version and the zip name from the tag and `gh release upload` it; gotcha #12 lists the traps that silently produce an empty release, and electron-files.md has the two-app variant.
+7. **CI** (`.github/workflows/electron.yml`): `windows-latest` → setup-node → `yarn install --frozen-lockfile` → `yarn test:electron` → `yarn electron:build` → upload the build as an artifact. The workflow in electron-files.md pins each action to a major (`actions/checkout@v7`, `actions/setup-node@v7`, `actions/upload-artifact@v7`, `softprops/action-gh-release@v3`) — **check those are still the latest major before trusting the template**, e.g. `gh api repos/actions/checkout/releases/latest --jq .tag_name`. If the desktop work lives on a side branch, host the workflow **on the default branch** with its checkout pinned by `ref:` (gotcha #10). To also attach the build to a GitHub Release — e.g. alongside a Tauri release in the same tag — derive both the version and the zip name from the tag and `gh release upload` it; gotcha #12 lists the traps that silently produce an empty release, and electron-files.md describes the two-app variant in prose rather than as a template.
 
 8. **Verify:** `yarn test:electron` (pure modules), then `yarn electron:build` and run the unpacked `<AppName>.exe`. GUI/visual QA (no white screen, i18n, persistence, tray) must be done by a human on a real (ideally WebView2-less) Windows box — a headless agent can only confirm the process launches without crashing.
 
@@ -77,7 +76,7 @@ Do these in order. Full code is in [electron-files.md](electron-files.md). The w
 | 9 | **Relaunch spawns duplicate windows.** | `app.requestSingleInstanceLock()`; `app.quit()` if not primary; on `second-instance` restore/show/focus the existing window. |
 | 10 | **`workflow_dispatch` button missing.** GitHub only shows "Run workflow" if the workflow file is on the **default branch**. Keeping the desktop build on a side branch hides the button. | Keep the workflow **only on `main`** with `checkout: { with: { ref: <desktop-branch> } }` — the pinned `ref` makes both the manual button *and* tag pushes build the branch's code, so you don't need (or want) a copy on the desktop branch, which would only drift. Keep it separate from any existing Tauri/desktop workflow rather than overwriting it. |
 | 11 | **`portable` exe is slow to start; unsigned exe warns.** electron-builder `portable` = a self-extractor that re-unzips to %TEMP% on **every** launch. And any unsigned build trips Windows SmartScreen "unknown publisher". | For intranet, `target: dir` → `win-unpacked/` runs `<AppName>.exe` directly (no per-launch extraction). Distribute the folder (zip for transport; GitHub auto-zips an uploaded folder artifact). SmartScreen needs a code-signing cert to silence — usually acceptable internally. |
-| 12 | **Release ends up empty / Electron build never ran when shipping in the same tag as Tauri.** Three traps: (a) tag-triggered runs execute the workflow **from the tagged commit**, so a fix merged to `main` *after* you tag doesn't apply — and if the tagged commit's `electron.yml` lacks a `push: tags` trigger, the Electron build never fires (only Tauri does); (b) if Electron polls for the Tauri-created **draft** Release by git-tag name but Tauri names the release from its **app version**, a version mismatch makes Electron wait then time out, attaching nothing; (c) naming the zip from the (possibly stale) feature-branch `package.json` mislabels the asset. | Cut the tag from a commit whose `main` already has the corrected workflow; rescue a bad one by re-tagging (`gh release delete vX --yes; git push origin :refs/tags/vX; git tag vX <fixed-commit>; git push origin vX`). Make the **git tag the single source of truth** on *both* workflows: inject it before build (`npm pkg set version="${GITHUB_REF_NAME#v}"`, guarded to `push`), and have the zip name + the `gh release upload` target both derive from the tag (`${GITHUB_REF_NAME#v}` / `$GITHUB_REF_NAME`), never the branch `package.json`. Keep workflows on `main` only (gotcha #10). The Release is a **draft** until you publish it. |
+| 12 | **Release ends up empty / Electron build never ran when shipping in the same tag as Tauri.** Three traps: (a) tag-triggered runs execute the workflow **from the tagged commit**, so a fix merged to `main` *after* you tag doesn't apply — and if the tagged commit's `electron.yml` lacks a `push: tags` trigger, the Electron build never fires (only Tauri does); (b) if Electron polls for the Tauri-created **draft** Release by git-tag name but Tauri names the release from its **app version**, a version mismatch makes Electron wait then time out, attaching nothing; (c) naming the zip from the (possibly stale) feature-branch `package.json` mislabels the asset. | Cut the tag from a commit whose `main` already has the corrected workflow; rescue a bad one by re-tagging (`gh release delete vX --yes; git push origin :refs/tags/vX; git tag vX <fixed-commit>; git push origin vX`). Make the **git tag the single source of truth** on *both* workflows: inject it before build (`npm pkg set version="${GITHUB_REF_NAME#v}"`, guarded to `push`), and have the zip name + the `gh release upload` target both derive from the tag (`${GITHUB_REF_NAME#v}` / `$GITHUB_REF_NAME`), never the branch `package.json`. Keep workflows on `main` only (gotcha #10). Whether the Release is a **draft** depends on which template you copied: in the two-app variant the Tauri side creates the draft and you publish it by hand, while the single-app template's release step publishes **immediately** on tag — add `draft: true` to it if you want a review gate. |
 
 ## Real-world result
 
