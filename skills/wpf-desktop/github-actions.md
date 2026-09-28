@@ -63,8 +63,8 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
-      # 标签 v1.2.0 → 版本 1.2.0 注入 exe；csproj 里 VersionFromGitTag 那个 target 的
-      # Condition 保证这里传进来的 -p:Version 不会被旧 tag 顶掉（见 pitfalls.md「版本号发出去还是上一版」）
+      # 标签 v1.2.0 → 版本 1.2.0 注入 exe；csproj 里 VersionFromGitTag 的 Condition 让这里
+      # 传进来的 -p:Version 跳过整个 target（见 pitfalls.md「版本号发出去还是上一版」）
       - name: Publish (both profiles)
         shell: pwsh
         run: |

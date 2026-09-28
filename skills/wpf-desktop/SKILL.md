@@ -1,12 +1,11 @@
 ---
 name: wpf-desktop
-version: 1.0.2
+version: 1.0.3
 description: Use when building, debugging or releasing a WPF desktop app on .NET — tray, single-file exe, DPI, startup, release CI. 托盘应用 / 单文件 exe. Refs are Chinese.
-tags: [wpf, dotnet, csharp, desktop, windows, tray, single-file, xaml, github-actions, winget]
-homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/wpf-desktop
 
 metadata:
   openclaw:
+    homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/wpf-desktop
     emoji: "🪟"
     os: ["win32"]
     files:

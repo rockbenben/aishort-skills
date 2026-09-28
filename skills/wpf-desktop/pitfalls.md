@@ -38,7 +38,7 @@ static void EnableAntiFlash(Window w)
 
 托盘应用的主窗口通常不是这样，关闭只是 `Hide()`，对象一直活着，`SourceInitialized` 一辈子只触发一次。于是只有开机后第一次显示不闪，之后每次从托盘打开白闪原样回来。
 
-补法是在窗口隐藏之后重新 cloak，为下一次显示备好：
+补法是在窗口隐藏之后重新 cloak，为下一次显示备好。**这段接在上面 `EnableAntiFlash` 的函数体里**——`Cloak` 和 `w` 都是那个函数的局部，单独贴到别处编译不过：
 
 ```csharp
 w.IsVisibleChanged += (_, e) =>
@@ -116,6 +116,8 @@ var takeover = e.Args.Contains("--show")
     : TimeSpan.FromMilliseconds(250);  // 用户双击，老实例还在，等待必然走满，越短越好
 ```
 
+`dev-switches.md` 里那句 `_mutex = new Mutex(true, …, out bool isFirst)` 后面用 `// …` 省掉的 `!isFirst` 分支，就是 `takeover` 的去处：`_mutex.WaitOne(takeover)`，按上面那条顺序先叫醒老实例再等。等到了说明老实例已经放手，本进程接着当唯一实例；等不到就自己退出。
+
 ## 冷启动 1.9 秒，慢的却不是磁盘
 
 启动慢别猜，先在 `OnStartup` 里埋分段计时：一个 `Stopwatch` 加一个 `Mark(string)`，每个阶段打一行，退出时写进临时文件。一个真实应用量出来是这样：
@@ -174,6 +176,8 @@ static void RaiseAboveBlocker(Window w, IntPtr hwnd, IntPtr blocker)
 if (gaveUp && stable == 0) RaiseAboveBlocker(w, live, blocker);
 ```
 
+调用点这四个名字都是守卫循环里的局部量，抄的时候要自己接上：`blocker` 是进 `BringToFront` 那一刻记下的 `GetForegroundWindow()`（② 靠它认人），`live` 是当前那个窗口句柄（喂给 `hwnd`），`stable` 是连续握住前台的次数（每 50 毫秒查一次），`gaveUp` 是走满 900 毫秒那条超时分支。`SetWindowPos`、`GetForegroundWindow` 和那几个 `SWP_*`/`HWND_*` 常量的声明沿用本文别处那种手写 `DllImport` 的写法（比如「窗口出现前白闪一下」里的 `DwmSetWindowAttribute`）；P/Invoke 攒到十几个再考虑 CsWin32，判据见 `project-setup.md`。
+
 **① 绝不能对 `Topmost="True"` 的窗口跑。** `SetWindowPos` 绕过 WPF 直接改 `WS_EX_TOPMOST`，而 `Window.Topmost` 属性值不跟着变——属性没变化就不触发 `OnTopmostChanged`，WPF 永远不会把样式贴回去。于是这个窗口**在进程剩余的生命周期里都不再置顶**。托盘工具的搜索/悬浮面板通常正是「置顶 + 全程复用同一个实例」，一次抢输就永久降级，之后每次在全屏应用上唤出都开在人家后面——用户看不见它，却在往里打字。而且对这类窗口它连收益都没有：面板拿不到前台时本来就会在 `onSettled` 里自我隐藏，翻上去那一下微秒级就被自己撤销了。
 
 **② 只压过「一开始那个赢家」。** 守卫窗口有 900 毫秒，用户完全可能在这期间自己切到第三个应用去打字。不判断的话，到期时前台是谁就盖谁，用户会看到一个自己已经离开的窗口莫名浮上来挡住正在输入的地方，且没有任何点击能解释它。做法是进 `BringToFront` 时先记下 `GetForegroundWindow()`，到期时只有前台还是它才动手。
@@ -222,7 +226,8 @@ if (gaveUp && stable == 0) RaiseAboveBlocker(w, live, blocker);
 w.SourceInitialized += (_, _) => {
     var hwnd = new WindowInteropHelper(w).Handle;               // 到这一步才非零
     var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
-    GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), ref mi);
+    // 拿不到显示器信息就什么都不做——退回 XAML 里那个保守的 MaxHeight
+    if (!GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), ref mi)) return;
     var scale = VisualTreeHelper.GetDpi(w).DpiScaleY;          // 这块屏自己的缩放
     var cap = (mi.rcWork.Bottom - mi.rcWork.Top) / scale - 72;  // 留点上下呼吸
     w.MaxHeight = Math.Max(cap, w.MinHeight);                   // 不能低于自己声明的下限
@@ -230,7 +235,7 @@ w.SourceInitialized += (_, _) => {
 };
 ```
 
-两个点容易写错。一是别用 `SystemParameters.WorkArea`，它给的是**主屏**的工作区，而声明了 PerMonitorV2 之后不存在「整个桌面一个尺寸」，对话框又通常是 `CenterOwner`，主窗口在副屏时就错了。二是 DPI 换算直接用 `VisualTreeHelper.GetDpi(窗口)`，PerMonitorV2 下它返回的就是该窗口那块屏的缩放，不必自己去 P/Invoke `GetDpiForMonitor`。
+三个点容易写错。一是别用 `SystemParameters.WorkArea`，它给的是**主屏**的工作区，而声明了 PerMonitorV2 之后不存在「整个桌面一个尺寸」，对话框又通常是 `CenterOwner`，主窗口在副屏时就错了。二是 DPI 换算直接用 `VisualTreeHelper.GetDpi(窗口)`，PerMonitorV2 下它返回的就是该窗口那块屏的缩放，不必自己去 P/Invoke `GetDpiForMonitor`。三是 `GetMonitorInfo` 的返回值必须判：不判的话探测失败时 `mi.rcWork` 全是零，`cap` 算成负数，`Math.Max(cap, w.MinHeight)` 会把窗口按到 `MinHeight` 上——那可不是「退回 XAML 里那个保守值」，而是把对话框压成一条。
 
 XAML 里那个 `MaxHeight` 仍然留着，而且要**留保守值**，别改成宽松的大数：运行时探测成功会覆盖它，所以大数唯一生效的场合就是探测失败——而那正是最需要保守值兜底的小屏场景。我第一版改成了 1400，等于在兜底路径上亲手复活了要修的 bug。
 
@@ -468,7 +473,7 @@ README 和 release notes 里写「自包含版约 68 MB、精简版约 1.5 MB」
 </Target>
 ```
 
-那个 `Condition` 是承重的，不是保险。**Target 内部的 PropertyGroup 会覆盖命令行传进来的全局属性**，少了这道判断，CI 里 `-p:Version=1.3.2` 会被 target 读到的旧 tag 顶掉，打 v1.3.2 的标签反而发出标着上一版号码的 exe。
+两道 `Condition` 都是承重的，但**不是**因为「Target 内部的 PropertyGroup 会覆盖命令行传进来的全局属性」：`-p:` 传进来的是全局属性，工程内的赋值盖不掉它（除非在 `<Project>` 上写 `TreatAsLocalProperty`），所以「旧 tag 顶掉新版本号」这件事本来就不会发生。它们各自防的是别的：外层 `'$(Version)' == '$(VersionFallback)'` 让 CI 传了 `-p:Version` 时整个 Target 跳过，省掉白跑的一趟 `git describe`；内层 `'0'` 管没有 tag 的场合，少了它 `_GitTag` 就是空串，`<Version>` 被赋成空值，csproj 里那个 `$(VersionFallback)` 当场作废。
 
 `IgnoreExitCode` 也别写成 `ContinueOnError`，后者只是把失败降级成警告，仍然每次构建刷两条 MSB3073，而仓库里没有 tag 是 CI 的常态，浅克隆默认就不带 tag。CI 里记得给 checkout 加 `fetch-depth: 0`，否则拿不到 tag。
 
