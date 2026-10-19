@@ -84,6 +84,15 @@ jobs:
             node scripts/validate-skills.mjs
           fi
 
+      # The md-web viewer fetches the Markdown it renders from a route in the URL
+      # fragment, and its lifecycle writes replace the bucket's whole configuration
+      # (S3 has no per-rule API). A regression in either is invisible in review and
+      # destructive in production, and nothing else in this workflow would notice.
+      - name: Test md-web
+        run: |
+          node scripts/test-md-web-viewer.mjs
+          node scripts/test-md-web-lifecycle.mjs
+
   publish:
     needs: detect
     if: needs.detect.outputs.skills != '[]'
