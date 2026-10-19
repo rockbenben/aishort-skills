@@ -24,3 +24,12 @@ Check the link you received and make sure the `#/document-name` part is included
 - **Table of contents / 目录导航** — auto-generated from headings, shown on screens wider than 1300px / 根据标题自动生成，宽度超过 1300px 的屏幕才显示
 - **Image zoom / 图片缩放** — click any image to view full size / 点击图片查看原图
 - **Word count / 字数统计** — reading time estimate / 自动估算阅读时间
+
+## About this page / 关于本页
+
+Rendered by [MD Web](https://github.com/rockbenben/aishort-skills/tree/main/skills/md-web).
+It loads Markdown only from its own bucket, and a link whose route points anywhere else
+is refused rather than rendered.
+
+本页由 [MD Web](https://github.com/rockbenben/aishort-skills/tree/main/skills/md-web) 渲染：
+只加载自家存储桶里的 Markdown，任何指向别处的文档路由都会被拒绝而不是照常渲染。
