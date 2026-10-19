@@ -1,6 +1,6 @@
 ---
 name: md-web
-version: 1.2.1
+version: 1.2.2
 description: Use when markdown should become a shareable web page or link. Uploads to your S3 bucket and the URL is public, so only on request. 做成网页 / 分享为链接.
 
 metadata:
@@ -138,7 +138,7 @@ This skill connects only to the S3 endpoint configured by the user in `config.js
 ## Security & privacy
 
 - **Anything you upload becomes publicly accessible** at the returned URL, and there is no undo — never upload secrets, credentials, PII, or other sensitive content.
-- Credentials go in **plaintext** in `~/.md-web/config.json` (outside the skill directory, safe from upgrades) and are only sent to the user's own S3 endpoint for authentication. If the user would rather not keep a secret in a file, `access_key` and `secret_key` can come from the `MD_WEB_ACCESS_KEY` / `MD_WEB_SECRET_KEY` environment variables instead. Protect the file either way — don't commit it or share it.
+- Credentials go in **plaintext** in `~/.md-web/config.json` (outside the skill directory, safe from upgrades) and are only sent to the user's own S3 endpoint for authentication. Two ways to reduce the exposure: put them in the `MD_WEB_ACCESS_KEY` / `MD_WEB_SECRET_KEY` environment variables instead of the file, or keep them in the file and let the script's `chmod 600` stand (it applies on macOS/Linux; Windows file permissions are not changed). Protect the file — don't commit it or share it.
 - **Use a dedicated bucket.** Uploads live under the `md-web/` key prefix and any rule this skill manages is scoped to that prefix, so viewer files and unrelated objects are never expired. A dedicated bucket is still the clean answer: it keeps this skill's bucket-administration rights away from anything you actually care about.
 - **The published viewer renders Markdown from your bucket as raw HTML**, which is what makes `<details>` blocks, alignment and inline images work. It is protected by two things: a route guard (`docsify-server/assets/config.js`) that only ever loads same-origin paths under `md-web/`, so a crafted link cannot make the viewer fetch a document from another origin, and a Content-Security-Policy that keeps `'unsafe-inline'` out of `script-src`, so HTML inside a document cannot run script either. Treat the domain as public and untrusted regardless: it holds documents anyone can publish into your bucket.
 - No telemetry, analytics, or data collection by the skill itself.

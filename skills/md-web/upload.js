@@ -101,6 +101,13 @@ var REQUIRED = ["access_key", "secret_key", "endpoint", "bucket", "public_url"];
 // The file wins when both are set, so an existing setup keeps working unchanged.
 if (!CONFIG.access_key && process.env.MD_WEB_ACCESS_KEY) CONFIG.access_key = process.env.MD_WEB_ACCESS_KEY;
 if (!CONFIG.secret_key && process.env.MD_WEB_SECRET_KEY) CONFIG.secret_key = process.env.MD_WEB_SECRET_KEY;
+// config.json holds the bucket secret. Written with the default umask it lands at
+// 0644, i.e. readable by every account on the machine; 0600 is the difference
+// between "only me" and "everyone", and it costs one call. Windows ACLs are not
+// chmod, so this is POSIX-only — the env vars above are the portable answer.
+if (process.platform !== "win32") {
+  try { fs.chmodSync(CONFIG_PATH, 0o600); } catch (_) {}
+}
 var missing = REQUIRED.filter(function (k) { return !CONFIG[k]; });
 if (missing.length) {
   console.error("Missing config fields: " + missing.join(", "));

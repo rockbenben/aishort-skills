@@ -113,7 +113,7 @@ instead. Re-run the one-time setup step after changing it.
 ## Security
 
 - **Anything you upload is publicly accessible** at the returned URL, and publishing cannot be undone — never upload secrets, API keys, PII, or other sensitive content.
-- Credentials live in **plaintext** in `~/.md-web/config.json`, or in `MD_WEB_ACCESS_KEY` / `MD_WEB_SECRET_KEY` if you prefer to keep them out of a file. Protect it either way — don't commit it or share it.
+- Credentials live in **plaintext** in `~/.md-web/config.json`, or in `MD_WEB_ACCESS_KEY` / `MD_WEB_SECRET_KEY` if you prefer to keep them out of a file. On macOS and Linux the script tightens the config file to owner-only access; protect it either way — don't commit it or share it.
 - **Use a dedicated bucket.** Uploads and any expiry rule are namespaced under `md-web/`, but a dedicated bucket keeps this skill's bucket-administration rights away from anything you actually care about.
 - **The viewer renders your Markdown as HTML**, so `<details>` blocks, alignment and inline images work. Two things keep that safe: a route guard that only loads same-origin paths under `md-web/` (a crafted link cannot make the viewer fetch a document from another origin), and a Content-Security-Policy without `'unsafe-inline'`, so HTML inside a document cannot run script. Treat the domain as public either way.
 
