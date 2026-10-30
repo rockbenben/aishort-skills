@@ -63,6 +63,13 @@ export const openExternalLink = async (url: string) => {
 
 ## `desktop/updater.ts` — check + download (defer install)
 
+> **What this does on the user's machine:** the app contacts the update endpoint from
+> `tauri.conf.json` (`plugins.updater.endpoints`) on startup (after `startupDelay`, 3 s by
+> default) and then once every `checkInterval` (24 h by default). When a newer release
+> exists it **downloads the update before the user answers** — the dialog asks only
+> whether to *install* an update that was already downloaded. Drop the hook (and the
+> `updater` plugin block) and the app makes no such request at all.
+
 ```ts
 "use client";
 import { isTauri } from "./externalLink";
@@ -168,6 +175,14 @@ exactly as on the web. **Do NOT hard-navigate** (`window.location`) for a switch
 reload remounts the `[locale]` layout subtree, which resets `useRef` guards and re-fires
 any startup redirect — the bounce that makes switching look broken (gotcha #11).
 
+**The language is the user's to choose.** The app opens in the **configured default
+locale** — `DEFAULT_LOCALE` below, and the window's entry `url` in `tauri.conf.json` must
+point at the same locale. It never guesses the language from the OS and never stores a
+detected locale: the only locale it remembers is the one the user **explicitly picked**
+in the switcher, and the user can change that at any time. If you want to *offer* the
+system language, call `detectSystemLocale(valid)` from a UI that asks first ("Start in
+your system language?") and apply it only when the user accepts.
+
 Remembering the language across launches is **optional**. If you add it, two rules keep
 the launch-time redirect from fighting the switcher:
 
@@ -187,13 +202,24 @@ import { usePathname, useRouter } from "next/navigation";
 import { isTauriRuntime } from "./externalLink";
 
 const KEY = "<app>_preferred_language";
+
+// The locale the app starts in when the user has not chosen one. This is a configuration
+// value, not a guess: set it to your app's default ("en", "zh", …) and keep it in sync
+// with the window's entry URL in tauri.conf.json (app.windows[].url).
+export const DEFAULT_LOCALE = "en";
+
+// The locale the USER picked in the language switcher. Nothing else writes this key.
 export const setPreferredLanguage = (l: string) => { try { localStorage.setItem(KEY, l); } catch {} };
 const read = () => { try { return localStorage.getItem(KEY); } catch { return null; } };
 const localeOf = (p: string) => p.match(/^\/([a-z]{2}(-[a-z]+)?)/i)?.[1] ?? null;
-const systemLocale = () => {
-  const s = (typeof navigator !== "undefined" && navigator.language) || "en";
-  if (s.startsWith("zh")) return /TW|HK|Hant/i.test(s) ? "zh-hant" : "zh";
-  return s.split("-")[0];
+
+// Optional: detect the OS language to OFFER it. It is never applied or stored on its
+// own — call it from a UI that asks ("Start in your system language?"), and it returns
+// null for any locale you do not ship.
+export const detectSystemLocale = (valid: string[]): string | null => {
+  const s = (typeof navigator !== "undefined" && navigator.language) || "";
+  const guess = s.startsWith("zh") ? (/TW|HK|Hant/i.test(s) ? "zh-hant" : "zh") : s.split("-")[0];
+  return valid.includes(guess) ? guess : null;
 };
 
 // MODULE-level, not a ref: survives the [locale] layout remount a switch triggers, so
@@ -208,9 +234,12 @@ export function useLanguagePreference(valid: string[]) {
     const cur = localeOf(pathname);
     if (!cur) return;
     sessionRedirectDone = true;
-    let pref = read();
-    if (!pref) { const s = systemLocale(); if (valid.includes(s)) { pref = s; setPreferredLanguage(s); } } // first run → system
-    if (pref && valid.includes(pref) && pref !== cur) {
+    // Only an EXPLICIT choice is honoured. With no stored choice the app falls back to
+    // the configured DEFAULT_LOCALE — which is the window's entry URL, so it stays where
+    // it opened. The OS language is never guessed here, and nothing is written to
+    // storage on this path.
+    const pref = read() ?? DEFAULT_LOCALE;
+    if (valid.includes(pref) && pref !== cur) {
       router.replace(pathname.replace(/^\/[a-z]{2}(-[a-z]+)?/i, `/${pref}`)); // SOFT redirect, once
     }
   }, [pathname, router, valid]);
@@ -224,7 +253,7 @@ import { setPreferredLanguage } from "@/app/desktop/useLanguagePreference";
 import { isTauriRuntime } from "@/app/desktop/externalLink";
 
 const onPick = (locale: string) => {
-  if (isTauriRuntime()) setPreferredLanguage(locale);      // remember the explicit choice
+  if (isTauriRuntime()) setPreferredLanguage(locale);      // remember the explicit choice — the user's, and changeable at any time
   const next = pathname.replace(/^\/[a-z]{2}(-[a-z]+)?/, `/${locale}`);
   router.push(`${next}${window.location.search}${window.location.hash}`); // SOFT nav — works in Tauri
 };
@@ -249,7 +278,7 @@ import { routing } from "@/i18n/routing"; // next-intl only — no next-intl? de
 
 export default function TauriIntegration() {
   useAutoUpdate();
-  useLanguagePreference([...routing.locales]); // …and this line; language persistence is a next-intl feature
+  useLanguagePreference([...routing.locales]); // …and this line; the app opens in DEFAULT_LOCALE (or the locale the user picked) — language persistence is a next-intl feature
 
   useEffect(() => {
     if (!isTauriRuntime()) return;

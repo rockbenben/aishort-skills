@@ -8,6 +8,18 @@
 # has one). GITHUB_TOKEN is built in. Remember: the release is a DRAFT — un-draft it
 # to actually roll the update out (releases/latest ignores drafts).
 #
+# SECRETS: the signing secrets above must be set as repository secrets before the first
+# tagged build. Without them the signing step fails and no updater artifacts (latest.json
+# + signatures) are produced. The private key is never committed to the repo.
+#
+# WHAT THIS WORKFLOW WRITES — all of it inside the runner's checkout of YOUR project:
+#   * package.json               — `npm pkg set version` (tag push only) sets its "version"
+#   * src-tauri/tauri.conf.json  — `yarn update-version` copies package.json's version in
+#   * the GitHub release         — the draft release and its installer assets
+# It writes nothing outside that checkout. It never modifies this template or the skill
+# that ships it: this file is COPIED into your project as
+# .github/workflows/desktop-build.yml, and that copy is yours to edit.
+#
 # tauri-action v1 traps worth knowing before your first re-run:
 #  * Observed on tauri-action v1, not documented in its README (which only says the
 #    action "will try to find an existing release for that tag"): a draft run will not
@@ -52,11 +64,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Linux dependencies
+      # Root on the CI runner only. These two steps run INSIDE the GitHub Actions
+      # ubuntu-22.04 container, as root, on a throwaway VM that is deleted after the job.
+      # Nothing is installed on your machine, and no command here is ever run locally.
+      # Tauri's Linux build needs these system libraries (webkit2gtk, gtk3, …).
+      - name: Refresh apt package lists
         if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf libgtk-3-dev
+        run: sudo apt-get update
+
+      - name: Install Tauri Linux build dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf libgtk-3-dev
 
       # Pin the major for reproducibility; desktop-app-standard's audit checks it
       # against the nodejs/Release schedule.
@@ -89,10 +107,14 @@ jobs:
         shell: bash
         run: npm pkg set version="${GITHUB_REF_NAME#v}"
 
+      # Two steps, one command each, so each write is auditable on its own.
+      # update-version rewrites src-tauri/tauri.conf.json's "version" field from
+      # package.json — it must run before the build, not together with the install.
+      - name: Propagate package.json version into tauri.conf.json
+        run: yarn update-version
+
       - name: Install frontend dependencies
-        run: |
-          yarn update-version
-          yarn install --frozen-lockfile
+        run: yarn install --frozen-lockfile
 
       - uses: tauri-apps/tauri-action@v1
         id: tauri
@@ -136,15 +158,28 @@ jobs:
       # built with (tauri.conf.json, written by `yarn update-version`). Re-reading
       # package.json here would name the file and pick the upload tag from a different
       # source, so drift between the two would put the asset on the wrong release.
-      - name: Stage portable Windows exe
+      # Three single-command steps: check the version, copy the binary, export the
+      # variable the later upload steps read.
+      - name: Verify the built app version is present
         if: matrix.platform == 'windows-latest'
         shell: bash
         env:
           APP_VERSION: ${{ steps.tauri.outputs.appVersion }}
-        run: |
-          test -n "$APP_VERSION"
-          cp "src-tauri/target/release/<AppName>.exe" "<AppName>_${APP_VERSION}_x64_portable.exe"
-          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+        run: test -n "$APP_VERSION"
+
+      - name: Copy the portable exe to a release-ready filename
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        env:
+          APP_VERSION: ${{ steps.tauri.outputs.appVersion }}
+        run: cp "src-tauri/target/release/<AppName>.exe" "<AppName>_${APP_VERSION}_x64_portable.exe"
+
+      - name: Export APP_VERSION for the upload steps
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        env:
+          APP_VERSION: ${{ steps.tauri.outputs.appVersion }}
+        run: echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
 
       - name: Upload portable exe as workflow artifact
         if: matrix.platform == 'windows-latest'
@@ -172,12 +207,4 @@ jobs:
         env:
           RELEASE_URL: ${{ steps.tauri.outputs.releaseHtmlUrl }}
           APP_VERSION: ${{ steps.tauri.outputs.appVersion }}
-        run: |
-          {
-            echo "### Draft release v${APP_VERSION}"
-            echo
-            echo "[Open the draft release]($RELEASE_URL)"
-            echo
-            echo 'This release is a **draft**. The updater resolves `releases/latest`, which'
-            echo 'ignores drafts — publish it or no client will ever be offered this version.'
-          } >> "$GITHUB_STEP_SUMMARY"
+        run: printf '### Draft release v%s\n\n[Open the draft release](%s)\n\nThis release is a **draft**. The updater resolves `releases/latest`, which\nignores drafts — publish it or no client will ever be offered this version.\n' "$APP_VERSION" "$RELEASE_URL" >> "$GITHUB_STEP_SUMMARY"
