@@ -31,18 +31,19 @@
     3. The flag — `--transparent`. It only removes the *browser's* default white; it cannot
        override a background the page paints itself.
 
-  YOU CANNOT CHECK THIS BY EYE: every image viewer paints transparent pixels white, so a
-  mark that kept its background looks identical to one that dropped it. Ask the file:
+  DO NOT RELY ON A VIEWER BACKGROUND: it can hide an unwanted opaque fill.
+  Check the actual alpha pixels with the bundled inspector — it reports the format,
+  the dimensions and whether any pixel is really transparent:
 
-    node -e "require(process.argv[1])(process.argv[2]).stats().then(s=>console.log(s.isOpaque?'NO alpha':'transparent'))" {SKILL_DIR}/node_modules/sharp icon.png
+    node "{SKILL_DIR}/inspect.mjs" icon.png
 
-  (Both paths are arguments on purpose: spliced into the quoted JS, a Windows path's
-   backslashes are read as escape sequences and the require fails.)
+  ("opaque":false means the file really has transparent pixels; "hasAlpha":true on its
+  own only says the channel exists.)
 
   One thing transparency does NOT survive: apple-touch-icon. iOS composites alpha onto black,
   so that one file must be flattened — icons.mjs does it for you, onto --bg.
 -->
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
 <style>
@@ -64,8 +65,8 @@
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 3.125vmin;
     /* The shape. Everything outside this radius stays transparent.
-       22.5% is close to the squircle iOS masks app icons with, so a mark drawn at this
-       radius lines up with the corners iOS draws for the apple-touch-icon. */
+       This is a generic rounded mark, not a guaranteed match for any OS icon mask.
+       For Apple delivery, prefer purpose-made full-bleed square artwork. */
     border-radius: 22.5vmin;
     background: linear-gradient(140deg, #2f6df6 0%, #1b3fd8 60%, #5b2fe0 100%);
     color: #fff;
