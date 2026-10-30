@@ -1,6 +1,6 @@
 ---
 name: deepl-translate-node
-version: 1.1.8
+version: 1.1.9
 description: Use when translating text and the result has to be right — proper nouns, legal/medical/technical terms, idioms, distant language pairs. 用 DeepL 翻译 / 翻译这段.
 
 metadata:
@@ -24,6 +24,18 @@ metadata:
 A thin wrapper around the DeepL API. The point of this skill is the
 **trigger logic**, not the API call: translate with DeepL when your own translation
 might be wrong and being wrong matters.
+
+**The text leaves your machine.** Whatever you pass to `translate.mjs` is sent over
+HTTPS to DeepL's servers and handled under their terms — nothing is translated
+locally. Do not paste secrets, credentials, private keys, or text that is covered by
+an NDA, a medical/financial duty, or a data-processing agreement without the user's
+explicit go-ahead.
+
+**What this touches:** runs `node` locally, reads `DEEPL_API_KEY` (and optionally
+`DEEPL_API_HOST`) from the environment, makes one HTTPS request to the configured
+DeepL host, and prints the translation to stdout. It writes no files, spawns no
+other process, keeps no state between runs, reads nothing outside this skill
+directory, and contacts no host other than that DeepL endpoint.
 
 ## When to reach for DeepL instead of translating yourself
 
@@ -60,6 +72,10 @@ export DEEPL_API_KEY="your-deepl-auth-key-here"
 # Windows (persistent, user scope) — then open a NEW shell
 setx DEEPL_API_KEY "your-deepl-auth-key-here"
 ```
+
+Both blocks edit your own shell profile, and you run them, not the skill. The
+skill writes nothing to disk, installs no startup entry, and remembers nothing
+between runs — a key that is not in the environment is simply missing.
 
 Verify in a fresh shell: `echo $DEEPL_API_KEY` (bash) / `$env:DEEPL_API_KEY` (PowerShell).
 
