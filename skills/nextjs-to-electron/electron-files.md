@@ -42,7 +42,7 @@ instead. `require("electron")` still returns a usable path: the package's entry 
 downloads on demand before handing it over, so the dev launcher below needs no change. In CI
 the fetch lands inside `yarn electron:build`, not `yarn install`.
 
-**List the test files explicitly** — the tempting `node --test electron/*.test.js` is a trap that fails in CI: PowerShell, GitHub's default Windows shell, does **not** expand the `*` glob, so the literal `electron/*.test.js` reaches `node --test` and matches nothing. `node --test electron` / `node --test electron/` are also wrong — Node tries to load `electron` as a module/entry, not search the dir. An explicit list works on every Node version and shell; add new test files to it as you create them.
+**List the test files explicitly** — the tempting `node --test electron/*.test.js` is not a safe default: Node ≥21 expands that glob itself (verified on Node 24: 2 tests, exit 0), but older Node does not, and PowerShell — GitHub's default Windows shell — never expands it, so on those combinations the literal `electron/*.test.js` reaches `node --test` and matches nothing. `node --test electron` / `node --test electron/` are wrong on every version — Node tries to load `electron` as a module/entry, not search the dir. An explicit list works on every Node version and shell; add new test files to it as you create them.
 
 ## Pure modules (no `require("electron")` → unit-testable with `node --test`)
 
@@ -563,9 +563,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+      # Pin the Node major; desktop-app-standard's audit checks nodejs/Release (verify Electron's floor with `npm view electron engines`).
       - uses: actions/setup-node@v7
         with:
-          node-version: lts/* # track current LTS; current Electron needs node >= 22.12
+          node-version: 26
           cache: yarn
       - run: yarn install --frozen-lockfile
       - run: yarn test:electron
@@ -602,8 +603,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: feat/electron-desktop   # <-- pin to the branch that has electron/. Update if it merges/renames.
+      # Pin the Node major; desktop-app-standard's audit checks nodejs/Release (verify Electron's floor with `npm view electron engines`).
       - uses: actions/setup-node@v7
-        with: { node-version: lts/*, cache: yarn } # current Electron needs node >= 22.12
+        with: { node-version: 26, cache: yarn }
       - run: yarn install --frozen-lockfile
       - run: yarn test:electron
       - run: yarn electron:build

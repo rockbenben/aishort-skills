@@ -1,6 +1,6 @@
 ---
 name: nextjs-to-electron
-version: 1.1.6
+version: 1.1.7
 description: Use when packaging a Next.js static export as a Windows Electron app, notably offline/intranet boxes with no WebView2. Triggers on Electron 桌面版 / 打包成 exe.
 
 metadata:
@@ -24,16 +24,29 @@ Wrap a **client-side** Next.js (App Router) static export in a thin Electron she
 ## When to use
 
 - The app is (or can be) a **static export** (`output: "export"`) — diff/format/calculator/viewer tools, no SSR or API-at-runtime.
+- **Export prerequisites**: `output: "export"` in `next.config.*`, plus `images.unoptimized: true` when the app uses `next/image` — Next throws at export time otherwise ("Image Optimization using the default loader is not compatible with export"). That is a config line, not a source edit.
 - You want a Windows desktop build that runs **fully offline**, especially where WebView2 is absent (LTSC/Server images, air-gapped intranet) so Tauri won't launch.
 
 **Target current Electron and check the floor first.** Electron follows Chromium, so
 "old machine" has a hard bottom: **64-bit Windows 10 or newer**. Windows 7/8/8.1 were
 dropped years ago, and **Electron 44 stopped publishing 32-bit Windows (`ia32`) binaries
-altogether** — v43.5.1 ships 7 `win32-ia32` release assets, v44.0.0 ships none. A 32-bit
+altogether** — v43.5.1 ships 6 `win32-ia32` release assets, v44.0.0 ships none. A 32-bit
 or pre-10 target is out of scope for this playbook; do not plan around pinning an old
 Electron to reach it, because that lands you on an unsupported build with no security
 updates (Electron supports only the latest three majors). Verify the target's bitness and
 Windows build number before promising anyone a desktop app.
+
+**Verify the moving versions before installing.** Run `npm view electron electron-builder version` and
+confirm Electron's major is one of the latest three in
+`https://releases.electronjs.org/releases.json` (or let `desktop-app-standard`'s audit
+compute the window). For CI Node, pin the current Active LTS major from
+`https://raw.githubusercontent.com/nodejs/Release/main/schedule.json` — **not** `lts/*`;
+a new LTS line should arrive as a reviewed upgrade, not silently under a running pipeline.
+`engines.node` is the code's real floor (take it from Next/Electron's own engines), not a
+copy of the CI major; `.nvmrc` is optional. For `electron-builder`/`electron-updater`,
+`npm view <pkg> dist-tags` can show a `vNN` tag one patch ahead of `latest`; install
+`latest`, or that tag if you want the newest stable patch, and let the desktop audit
+flag newer GitHub releases.
 
 **Do NOT use when** the app needs a live Node server at runtime (real API routes, SSR, server actions). **Prefer `nextjs-to-tauri`** when the targets have WebView2 and you want a ~3–10 MB exe with auto-update — Electron is ~150 MB because it ships Chromium.
 
@@ -43,9 +56,9 @@ This playbook targets **Windows** (`--win dir`/`portable`, SmartScreen, WebView2
 
 Do these in order. Full code is in [electron-files.md](electron-files.md). The web source under `src/`, `messages/`, `next.config.*` stays untouched. Every command is written for **yarn**; in an npm or pnpm repo substitute the equivalent (`npm ci` for `yarn install --frozen-lockfile`) and match `setup-node`'s `cache:` to the lockfile you actually have — `cache: yarn` fails the job outright when there is no `yarn.lock`.
 
-1. **Confirm the export is client-side and check its shape.** `yarn build`, then `ls out/` — you'll see flat files (`index.html`, `en.html`, `zh.html`) and `_next/`. `trailingSlash: false` (flat files) is fine; the resolver handles both layouts (gotcha #2).
+1. **Confirm the export is client-side and check its shape.** `yarn build`, then `ls out/` — you'll see flat files (`index.html`, `en.html`, `zh.html`) and `_next/`. `trailingSlash: false` (flat files) is fine; the resolver handles both layouts (gotcha #2). If the build stops on the default image loader, that is the `images.unoptimized` prerequisite above — set it and rebuild.
 
-2. **Add the toolchain:** `yarn add -D electron electron-builder`. In `package.json` add `"main": "electron/main.js"` and scripts: `electron:dev` (a node launcher that sets `ELECTRON_DEV=1` and spawns electron — avoids a `cross-env` dep), `electron:build` (`next build && electron-builder --win dir`), `test:electron` (list the test files explicitly — `node --test electron/resolvePath.test.js electron/store.test.js …`; the `electron/*.test.js` glob breaks in CI, gotcha #5).
+2. **Add the toolchain** (after the version check above): `yarn add -D electron electron-builder`. In `package.json` add `"main": "electron/main.js"` and scripts: `electron:dev` (a node launcher that sets `ELECTRON_DEV=1` and spawns electron — avoids a `cross-env` dep), `electron:build` (`next build && electron-builder --win dir`), `test:electron` (list the test files explicitly — `node --test electron/resolvePath.test.js electron/store.test.js …`; the `electron/*.test.js` glob breaks in CI, gotcha #5).
 
 3. **Create the `electron/` layer** (copy from electron-files.md). Split into **pure modules that must NOT `require("electron")`** (so `node --test` runs them) and Electron-bound ones:
    - `constants.js` — `SCHEME="app"`, `LOCALES[]`. `resolvePath.js` — `resolveAssetPath(outDir, pathname, exists)` with `.html`→`/index.html`→`404.html` fallback. `store.js` — dependency-free JSON store in `userData`. `locale.js` — `startUrl`/`parseLocale`/`trackLocale`. `window-state.js` — `createWindowStateKeeper`. (All pure → unit-tested.)
@@ -57,7 +70,7 @@ Do these in order. Full code is in [electron-files.md](electron-files.md). The w
 
 6. **Package** (gotcha #6). `electron-builder.yml`: `extraResources` maps `out → out` and `build/icon.png → icon.png`; `main.js` reads them at `process.resourcesPath/out` and `/icon.png` when packaged. Choose target: `dir` (unpacked folder — runs `<AppName>.exe` directly, fast) vs `portable` (self-extractor, re-unzips to %TEMP% every launch, slower) — gotcha #11.
 
-7. **CI** (`.github/workflows/electron.yml`): `windows-latest` → setup-node → `yarn install --frozen-lockfile` → `yarn test:electron` → `yarn electron:build` → upload the build as an artifact. The workflow in electron-files.md pins each action to a major (`actions/checkout@v7`, `actions/setup-node@v7`, `actions/upload-artifact@v7`, `softprops/action-gh-release@v3`) — **check those are still the latest major before trusting the template**, e.g. `gh api repos/actions/checkout/releases/latest --jq .tag_name`. If the desktop work lives on a side branch, host the workflow **on the default branch** with its checkout pinned by `ref:` (gotcha #10). To also attach the build to a GitHub Release — e.g. alongside a Tauri release in the same tag — derive both the version and the zip name from the tag and `gh release upload` it; gotcha #12 lists the traps that silently produce an empty release, and electron-files.md describes the two-app variant in prose rather than as a template.
+7. **CI** (`.github/workflows/electron.yml`): `windows-latest` → setup-node → `yarn install --frozen-lockfile` → `yarn test:electron` → `yarn electron:build` → upload the build as an artifact. The workflow in electron-files.md pins each action to a major (`actions/checkout@v7`, `actions/setup-node@v7`, `actions/upload-artifact@v7`, `softprops/action-gh-release@v3`) and Node to a major — **check those are still current before trusting the template** (actions against their latest release, Node against the official schedule), e.g. `gh api repos/actions/checkout/releases/latest --jq .tag_name`. If the desktop work lives on a side branch, host the workflow **on the default branch** with its checkout pinned by `ref:` (gotcha #10). To also attach the build to a GitHub Release — e.g. alongside a Tauri release in the same tag — derive both the version and the zip name from the tag and `gh release upload` it; gotcha #12 lists the traps that silently produce an empty release, and electron-files.md describes the two-app variant in prose rather than as a template.
 
 8. **Verify:** `yarn test:electron` (pure modules), then `yarn electron:build` and run the unpacked `<AppName>.exe`. GUI/visual QA (no white screen, i18n, persistence, tray) must be done by a human on a real (ideally WebView2-less) Windows box — a headless agent can only confirm the process launches without crashing.
 
@@ -65,11 +78,11 @@ Do these in order. Full code is in [electron-files.md](electron-files.md). The w
 
 | # | Gotcha | Fix |
 |---|--------|-----|
-| 1 | **White screen / unstyled — the `file://` trap.** `win.loadFile("out/index.html")` makes absolute asset paths `/_next/...` resolve to the **filesystem root**, not the app dir → every asset 404s. `loadFile` does NOT rebase absolute paths. (Agents confidently claim it "resolves relative to the file" — it does not.) | Register a custom **`app://` standard+secure** scheme and serve `out/` via `protocol.handle`; `loadURL("app://local/")`. Absolute `/_next/...` then resolve against the protocol origin. Bonus: a stable origin makes `localStorage` (theme/locale via next-themes) persist reliably — `file://`'s opaque origin silently breaks it. |
+| 1 | **White screen / unstyled — the `file://` trap.** `win.loadFile("out/index.html")` makes absolute asset paths `/_next/...` resolve to the **filesystem root**, not the app dir → every asset 404s. `loadFile` does NOT rebase absolute paths. (Agents confidently claim it "resolves relative to the file" — it does not.) | Register a custom **`app://` standard+secure** scheme and serve `out/` via `protocol.handle`; `loadURL("app://local/")`. Absolute `/_next/...` then resolve against the protocol origin. Bonus: a stable custom-scheme origin makes `localStorage` (theme/locale via next-themes) persist reliably — `file://` storage behaviour is not something to rely on. |
 | 2 | **`trailingSlash:false` → flat files, no directory index.** Pages are `en.html`/`zh.html`, not `en/index.html`; a file/protocol server won't append `.html`. | Resolver fallback, for an extensionless request: `path + ".html"` → `path + "/index.html"` → `404.html` (a request that already has an extension is served if it exists, else `404.html`). Handles both trailingSlash modes. Use exact-segment matching so `zh-hant` isn't swallowed by `zh`. |
 | 3 | **Language not remembered across launches.** Static export has **no middleware**, so root `index.html` redirects to the *default* locale every launch — the web app cannot remember. | Persist locale in a **main-process** JSON store; launch with `loadURL("app://local/" + savedLocale)`; capture changes via `webContents.on("did-navigate", …)` parsing the locale segment from the URL. |
 | 4 | **Don't couple the web app to Electron.** The naive instinct is a `preload.js` + `ipcMain.handle("set-locale")` that the React switcher must call — this edits `src/` and breaks the plain web build. | Everything (locale, window-state) is doable **passively** in the main process (`did-navigate`, window events). No preload, no IPC, no renderer edits. Keep `src/` byte-identical. |
-| 5 | **`node --test` can't run if pure logic imports electron.** `require("electron")` outside an Electron runtime throws. | Keep path-resolution, locale-parsing, and the store in modules that import only Node built-ins + `./constants`. Pass `win`/`app` in as parameters. Import electron ONLY in protocol.js/tray.js/main.js. Also: `test:electron` should **list the test files explicitly** (`node --test electron/resolvePath.test.js …`) — the `electron/*.test.js` glob is fragile — PowerShell, GitHub's default Windows shell, does not expand it, so the literal string reaches `node --test` and matches nothing — and `node --test electron` tries to load `electron` as a module rather than searching the directory. |
+| 5 | **`node --test` can't run if pure logic imports electron.** `require("electron")` outside an Electron runtime throws. | Keep path-resolution, locale-parsing, and the store in modules that import only Node built-ins + `./constants`. Pass `win`/`app` in as parameters. Import electron ONLY in protocol.js/tray.js/main.js. Also: `test:electron` should **list the test files explicitly** (`node --test electron/resolvePath.test.js …`) — that form works on every Node version and every shell. The `electron/*.test.js` glob is not a safe default: Node ≥21 expands it itself (so it passes there), but older Node does not, and PowerShell — GitHub's default Windows shell — never expands it, so on those combinations the literal string reaches `node --test` and matches nothing. And `node --test electron` tries to load `electron` as a module rather than searching the directory. |
 | 6 | **Packaged resource paths must match electron-builder; works in dev, white-screens packaged.** `main.js` uses `process.resourcesPath/out` and `/icon.png` when `app.isPackaged`. | `extraResources` must map `from: out → to: out` and `from: build/icon.png → to: icon.png` so the runtime paths line up. The static export is NOT in the asar — it's real files under `resources/`. |
 | 7 | **Web fonts hang offline.** A raw `<link href="fonts.googleapis.com">` fetches at runtime → FOUT/hang on an air-gapped box. | `next/font/google` self-hosts fonts into `_next/static/media` at **build** time (fine offline, as long as the CI build machine has internet). Self-host any other web fonts; never CDN-link them. |
 | 8 | **App can never quit / tray icon vanishes.** Close-to-tray that always `preventDefault`s traps the user; a `Tray` with no retained reference is garbage-collected and disappears. | Intercept window `close` → `preventDefault()`+`hide()` **UNLESS `app.isQuitting`**; only the tray "Quit" item sets `app.isQuitting=true` then `app.quit()`. Assign the `Tray` to a variable that outlives setup. |
@@ -80,4 +93,4 @@ Do these in order. Full code is in [electron-files.md](electron-files.md). The w
 
 ## Real-world result
 
-An 18-locale next-intl static-export tool wrapped in one branch: `src/` untouched, the hard logic (path resolution, locale parsing, store) unit-tested as pure Node modules (`node --test`), ~150 MB self-contained Windows build that runs with **no WebView2 / no network**, remembers language + window state, single-instance, close-to-tray. Pure modules verify locally; GUI QA is human-on-Windows.
+An 18-locale next-intl static-export tool wrapped in one branch: `src/` untouched, the hard logic (path resolution, locale parsing, store) unit-tested as pure Node modules (`node --test`), a self-contained Windows build that runs with **no WebView2 / no network** — about **150 MB as the downloaded zip, ~350 MB once unpacked** (the `dir` target distributes the unpacked tree, gotcha #11) — remembers language + window state, single-instance, close-to-tray. Pure modules verify locally; GUI QA is human-on-Windows.
