@@ -1,0 +1,56 @@
+<!doctype html>
+<!--
+  Social preview card for the html-shot skill (English). Source of truth — regenerate with:
+
+    node skills/html-shot/render.mjs assets/html-shot/social-card.html assets/html-shot/social-card.png
+
+  (run from the repo root). 1280x640, the size GitHub's social preview slot wants.
+
+  This is the skill's OWN card, not the repository's — assets/social-card.png stays the
+  collection's card. The Chinese card is social-card.zh.html -> social-card.zh.png.
+  Keep the two in sync, and keep both in the language of the audience they face.
+  hero.html's header lists the commands that rebuild the samples it shows.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  * { margin: 0; box-sizing: border-box; }
+  body {
+    position: relative;
+    width: 1280px; height: 640px; overflow: hidden;
+    display: flex; align-items: center; gap: 56px;
+    padding: 0 68px;
+    background: #f5f3ee; color: #14161a;
+    font-family: system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei",
+                 "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .text { flex: 1 1 auto; min-width: 0; }
+  .eyebrow { font-size: 24px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: #6b7280; }
+  .name { font-size: 128px; line-height: 1; font-weight: 800; letter-spacing: -0.035em; margin-top: 22px; }
+  .promise { font-size: 58px; line-height: 1.08; font-weight: 700; letter-spacing: -0.02em; margin-top: 26px; }
+  .promise .hl { color: #ff5a3c; }
+  .list { font-size: 26px; line-height: 1.5; color: #55595f; margin-top: 30px; }
+  .showcase { flex: 0 0 470px; }
+  .card {
+    width: 470px; height: 247px; overflow: hidden; border-radius: 12px;
+    box-shadow: 0 22px 46px rgba(20, 22, 26, 0.24), 0 2px 6px rgba(20, 22, 26, 0.16);
+  }
+  .card img { width: 100%; height: 100%; display: block; }
+  .foot { position: absolute; left: 68px; bottom: 34px; font-size: 22px; color: #8b9098; }
+</style>
+</head>
+<body>
+  <div class="text">
+    <div class="eyebrow">#030 · 365 Open Source Plan</div>
+    <div class="name">html-shot</div>
+    <div class="promise">Any HTML,<br />turned into <span class="hl">images</span>.</div>
+    <div class="list">og:images · screenshots · favicons · app icon sets</div>
+  </div>
+  <div class="showcase">
+    <div class="card"><img src="samples/og.png" alt="An og:image card rendered by html-shot" /></div>
+  </div>
+  <div class="foot">github.com/rockbenben/aishort-skills</div>
+</body>
+</html>

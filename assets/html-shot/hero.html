@@ -1,10 +1,21 @@
 <!doctype html>
 <!--
-  README hero card for the html-shot skill. Source of truth — regenerate with:
+  README hero card for the html-shot skill (English). Source of truth — regenerate with:
 
     node skills/html-shot/render.mjs assets/html-shot/hero.html assets/html-shot/hero.png
 
   (run from the repo root). System fonts only, so it renders with no /fonts directory.
+
+  The card shows the skill's OWN output, not a mock-up. Rebuild the samples first
+  (they are real renders produced by this skill):
+
+    node skills/html-shot/render.mjs assets/html-shot/samples/og.html assets/html-shot/samples/og.png
+    node skills/html-shot/render.mjs assets/html-shot/samples/og.zh.html assets/html-shot/samples/og.zh.png
+    node skills/html-shot/icons.mjs skills/html-shot/icon.example.html assets/html-shot/samples/icons --only pwa
+    node skills/html-shot/render.mjs skills/html-shot/icon.example.html assets/html-shot/samples/icons/favicon-32.png --width 32 --height 32 --transparent
+
+  The Chinese card is hero.zh.html -> hero.zh.png; keep the two in sync — the card text, and
+  the og sample it shows, have to match the language of the README it sits under.
 -->
 <html lang="en">
 <head>
@@ -13,26 +24,44 @@
   * { margin: 0; box-sizing: border-box; }
   body {
     position: relative;
-    width: 1200px; height: 630px; overflow: hidden;
-    display: flex; flex-direction: column; justify-content: center;
-    padding: 0 92px; gap: 26px;
-    background: #0f1115; color: #f4f4f2;
+    width: 1280px; height: 600px; overflow: hidden;
+    display: flex; align-items: center; gap: 52px;
+    padding: 0 68px;
+    background: #f5f3ee; color: #14161a;
     font-family: system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei",
                  "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
     -webkit-font-smoothing: antialiased;
   }
-  .eyebrow { font-size: 24px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: #8b93a1; }
-  h1 { font-size: 76px; line-height: 1.08; font-weight: 800; letter-spacing: -0.02em; max-width: 940px; }
+  .text { flex: 1 1 auto; min-width: 0; }
+  .eyebrow { font-size: 22px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: #6b7280; }
+  h1 { font-size: 62px; line-height: 1.06; font-weight: 800; letter-spacing: -0.025em; margin-top: 16px; }
   h1 .hl { color: #ff5a3c; }
-  .sub { font-size: 26px; color: #aab2c0; max-width: 800px; line-height: 1.5; }
-  .foot { position: absolute; left: 92px; bottom: 54px; font-size: 22px; color: #6b7280; }
+  .sub { font-size: 23px; line-height: 1.6; color: #55595f; margin-top: 20px; }
+  .showcase { flex: 0 0 448px; display: flex; flex-direction: column; gap: 24px; }
+  .card {
+    width: 448px; height: 236px; overflow: hidden; border-radius: 10px;
+    box-shadow: 0 18px 40px rgba(20, 22, 26, 0.22), 0 2px 6px rgba(20, 22, 26, 0.16);
+  }
+  .card img { width: 100%; height: 100%; display: block; }
+  .sizes { display: flex; align-items: flex-end; gap: 28px; padding-left: 4px; }
+  .sizes img { display: block; }
+  .foot { position: absolute; left: 68px; bottom: 30px; font-size: 20px; color: #8b9098; }
 </style>
 </head>
 <body>
-  <div class="eyebrow">Agent Skill</div>
-  <h1>Any HTML, shot as a <span class="hl">pixel-perfect</span> image.</h1>
-  <div class="sub">og:images, social cards, screenshots — headless Chromium, full CSS fidelity.
-    <span lang="zh-CN">中文与 emoji 直接走系统字体，无需打包 ✨</span></div>
+  <div class="text">
+    <div class="eyebrow">Agent Skill</div>
+    <h1>Any HTML.<br />Images you can <span class="hl">ship</span>.</h1>
+    <div class="sub">og:images · screenshots · favicons · app icon sets<br />Headless Chromium. System fonts — nothing to bundle.</div>
+  </div>
+  <div class="showcase">
+    <div class="card"><img src="samples/og.png" alt="An og:image card rendered by html-shot" /></div>
+    <div class="sizes">
+      <img src="samples/icons/favicon-32.png" width="32" height="32" alt="A 32px favicon" />
+      <img src="samples/icons/icon-192.png" width="68" height="68" alt="icon-192.png" />
+      <img src="samples/icons/icon-512.png" width="124" height="124" alt="icon-512.png" />
+    </div>
+  </div>
   <div class="foot">github.com/rockbenben/aishort-skills · skills/html-shot</div>
 </body>
 </html>

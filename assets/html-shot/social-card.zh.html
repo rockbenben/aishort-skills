@@ -1,0 +1,54 @@
+<!doctype html>
+<!--
+  Social preview card for the html-shot skill (Chinese). Source of truth — regenerate with:
+
+    node skills/html-shot/render.mjs assets/html-shot/social-card.zh.html assets/html-shot/social-card.zh.png
+
+  (run from the repo root). 1280x640, the size GitHub's social preview slot wants.
+
+  Keep in sync with social-card.html: same layout, same promise, in the language of the
+  audience it faces.
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<style>
+  * { margin: 0; box-sizing: border-box; }
+  body {
+    position: relative;
+    width: 1280px; height: 640px; overflow: hidden;
+    display: flex; align-items: center; gap: 56px;
+    padding: 0 68px;
+    background: #f5f3ee; color: #14161a;
+    font-family: system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei",
+                 "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .text { flex: 1 1 auto; min-width: 0; }
+  .eyebrow { font-size: 24px; font-weight: 700; letter-spacing: 0.14em; color: #6b7280; }
+  .name { font-size: 128px; line-height: 1; font-weight: 800; letter-spacing: -0.035em; margin-top: 22px; }
+  .promise { font-size: 58px; line-height: 1.14; font-weight: 700; letter-spacing: -0.02em; margin-top: 26px; }
+  .promise .hl { color: #ff5a3c; }
+  .list { font-size: 26px; line-height: 1.5; color: #55595f; margin-top: 30px; }
+  .showcase { flex: 0 0 470px; }
+  .card {
+    width: 470px; height: 247px; overflow: hidden; border-radius: 12px;
+    box-shadow: 0 22px 46px rgba(20, 22, 26, 0.24), 0 2px 6px rgba(20, 22, 26, 0.16);
+  }
+  .card img { width: 100%; height: 100%; display: block; }
+  .foot { position: absolute; left: 68px; bottom: 34px; font-size: 22px; color: #8b9098; }
+</style>
+</head>
+<body>
+  <div class="text">
+    <div class="eyebrow">#030 · 365 开源计划</div>
+    <div class="name">html-shot</div>
+    <div class="promise">任何 HTML，<br />变成<span class="hl">图片</span>。</div>
+    <div class="list">og:images · 截图 · favicon · 应用图标集</div>
+  </div>
+  <div class="showcase">
+    <div class="card"><img src="samples/og.zh.png" alt="html-shot 渲染出的 og:image 卡片" /></div>
+  </div>
+  <div class="foot">github.com/rockbenben/aishort-skills</div>
+</body>
+</html>
