@@ -34,7 +34,9 @@ Check that linked resources remain reachable after deployment; self-contained SV
 ## Source requirements
 
 - For browser-rendered icons, use square SVG or responsive square HTML; master is 1024×1024.
-  A fixed 320px HTML drawing does not fill a 1024px viewport. Prefer `icon.example.html`.
+  A fixed 320px HTML drawing does not fill a 1024px viewport. Prefer `icon.example.html` —
+  see [Starter templates](templates.md) for how it is sized and why transparency needs
+  three things at once.
 - For raster sources, require a square image with sufficient native resolution. PNG, JPEG,
   WebP, GIF, AVIF, TIFF are decoded to sRGB PNG; use the first frame, honour orientation,
   and downsample oversized masters to at most 1024px without enlarging smaller inputs.

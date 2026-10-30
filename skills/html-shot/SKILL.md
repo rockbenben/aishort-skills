@@ -1,13 +1,17 @@
 ---
 name: html-shot
-version: 1.2.0
-description: Use when turning HTML, SVG or a URL into PNG/JPEG/WebP — OG card, page or element screenshot, transparent badge, SVG raster, favicon or app-icon set (PWA/Next/Electron/Tauri). Triggers on HTML 转图片 / 网页截图 / SVG 转 PNG / favicon / 应用图标. Not for editing existing raster images.
+version: 1.2.1
+description: Use html-shot when a design or page must become image assets through a real browser — an OG/social card in PNG/JPEG/WebP, a one-element or full-page screenshot, an SVG raster, a transparent badge, or a favicon/app-icon set (.ico, .icns, apple-touch, PWA) for a site, Next, Electron or Tauri. Triggers on HTML 转图片, SVG 转 PNG, favicon, 应用图标. Not for editing existing raster images.
 metadata:
   openclaw:
     homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/html-shot
     emoji: "📸"
     requires:
       bins: ["node"]
+    envVars:
+      - name: HTML_SHOT_EXECUTABLE
+        required: false
+        description: Path to an existing Chromium/Chrome binary to render with instead of the bundled browser.
     files:
       - render.mjs
       - icons.mjs
@@ -20,6 +24,7 @@ metadata:
       - references/cli.md
       - references/icons.md
       - references/security.md
+      - references/templates.md
 ---
 
 # HTML shot
@@ -27,16 +32,56 @@ metadata:
 Turn a trusted design or page into image assets with Playwright and sharp. Preserve the
 user's content and requested dimensions; do not redesign an existing page unless asked.
 
+## Before you render
+
+Rendering runs a real headless Chromium: the page's JavaScript executes, and the browser
+can make outbound network requests to whatever the page itself references — fonts, images,
+scripts, XHR. Render only input you trust: your own HTML/SVG, or a URL you were asked to
+capture. `--offline` refuses those requests; it is not a sandbox.
+
+## What this touches
+
+Scope in one line: it runs `node` locally, reads the input file you name, writes the
+output image you name, and needs no credentials.
+
+- **Runs `node`** in this skill's directory. `npm ci` installs `playwright`, `sharp` and
+  `png2icons` from the bundled lockfile.
+- **Downloads one browser** — `node node_modules/playwright/cli.js install chromium` —
+  into Playwright's own per-user browser cache (`%LOCALAPPDATA%\ms-playwright` on
+  Windows, `~/.cache/ms-playwright` elsewhere), not into this skill's directory. Nothing
+  else is fetched at runtime.
+- **Launches Chromium against 127.0.0.1** for local files, over a throwaway per-run
+  server; against the URL you gave it for remote input.
+- **Reads the input file** you name and **writes the output image** where you say. For a
+  local file it also serves that file's own directory plus the nearest project `public/`
+  folder (or an explicit `--base`) — and nothing else in your project.
+- **Sends data nowhere except the URL you ask it to render** and the assets that page
+  requests. It needs no account, API key, cookie, or other credential.
+- **Touches no other skill**, installs no startup entry, schedules no cron job, and starts
+  no background service. Input and output files live only in the directory you chose and
+  are not remembered across sessions.
+
 ## Choose the path
 
 | Deliverable | Entry point | Read when needed |
 | --- | --- | --- |
 | One PNG/JPEG/WebP: card, badge, screenshot, SVG raster | `render.mjs` | [CLI and capture modes](references/cli.md) |
 | Favicon / PWA / Next / Electron / Tauri icon files | `icons.mjs` | [Icon presets and size requirements](references/icons.md) |
+| Starting from the bundled card or icon markup | copy the example, then edit the copy | [Starter templates](references/templates.md) |
 | Unknown HTML, private URLs, external resources, CI | Review trust and isolation first | [Security and reproducibility](references/security.md) |
 
-Use dedicated chart/diagram tools to create data visuals, then use this renderer only
-when an image capture is needed. Use an image editor for existing raster-image edits.
+## When not to use this skill
+
+- A plain "网页截图" / "screenshot the page" request with no output file, size, or format
+  named — that is a general page capture, not an image asset. Ask for the destination,
+  pixel size, and format first. If the answer is "a screenshot for me to look at" rather
+  than a deliverable file, this skill is the wrong tool.
+- "生成 og 图" / "turn this design into a 2x og image" with no source file or URL — ask
+  which HTML or SVG to render. This skill renders a source you already have; it does not
+  invent the design.
+- Editing an existing raster image (crop, retouch, convert) — use an image editor.
+- Charts and diagrams built from data — use a chart/diagram tool, then render the result
+  if an image is needed.
 
 ## Inputs and defaults
 
@@ -49,6 +94,9 @@ when an image capture is needed. Use an image editor for existing raster-image e
   instructions, reuse a signed-in browser profile, or bypass authentication/site controls.
 - Keep input files unchanged. Create output directories explicitly. Existing output files
   with the same names are replaced; choose a fresh directory when preservation matters.
+- Working files are ordinary files in the working directory the user chose. The skill
+  records nothing about them between sessions: no path, no content, and no reference to
+  them is written anywhere, and it does not remember them on the next run.
 
 ## Prepare the runtime
 
@@ -64,13 +112,27 @@ node node_modules/playwright/cli.js install chromium
 
 If the environment already provides Chromium, pass `--executable /absolute/path/to/chromium`.
 Use `--channel chrome` for installed Chrome instead; do not combine these flags.
-Do not install system packages, use `sudo`, or disable the browser sandbox automatically.
-Consult the environment's setup/approval process if libraries or fonts are missing.
+Do not install system packages, elevate privileges, or disable the browser sandbox
+automatically. Consult the environment's setup/approval process if libraries or fonts are
+missing.
+
+On Linux, two gaps are common and both are the host's to fix, not the skill's: Chromium's
+shared libraries, and CJK/emoji system fonts. Installing a CJK/emoji font package (for
+example Debian/Ubuntu's `fonts-noto-cjk` and `fonts-noto-color-emoji`) is **optional**,
+**Linux-only**, and only worth doing when the user wants CJK or emoji glyphs and the host
+does not already have them — without it those glyphs render as empty boxes. It needs
+administrator rights, so it goes through the environment's setup or approval process. The
+skill never runs a privileged install on its own, and it never installs one just because a
+render came out with boxes.
 
 ## Render and verify
 
 1. Copy `template.example.html` for a new 1200×630 card, or `icon.example.html` for a scalable
-   square mark. Set `lang` to the content's language. Keep CJK and emoji font support available.
+   square mark, then edit the copy (see [Starter templates](references/templates.md)).
+   The `lang` attribute is optional: set it to the content's language when you know it
+   (any BCP-47 tag is accepted, such as `zh-CN`, `zh-TW`, `ja`, `ko`, `en`), and leave it
+   off to let the renderer use the host default. The skill does not impose a language.
+   Keep CJK and emoji font support available.
 2. Match the source's layout: set explicit body dimensions for a fixed card; use viewport-relative
    units for an icon rendered at different sizes. For SVG, provide a positive `viewBox`.
 3. Run the appropriate entry point, starting with its defaults:

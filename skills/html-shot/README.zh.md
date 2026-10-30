@@ -4,12 +4,43 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/rockbenben/aishort-skills/blob/main/LICENSE) [![365 开源计划 #030](https://img.shields.io/badge/365%20%E5%BC%80%E6%BA%90%E8%AE%A1%E5%88%92-%23030-1f6feb)](https://github.com/rockbenben/365opensource)
 
-`clawhub install html-shot` · `npx skills add rockbenben/aishort-skills` · [English](README.md)
+[English](README.md)
 
 ![html-shot 把 HTML 设计渲染成图片](https://raw.githubusercontent.com/rockbenben/aishort-skills/main/assets/html-shot/hero.zh.png)
 
 > [!TIP]
-> 本地文件由一个一次性的 `127.0.0.1` 服务托管，交给本机的无头 Chromium 渲染，标记内容不会离开这台机器。页面里的 JavaScript 确实会执行 —— 只渲染你信任的输入。
+> 本地文件由一个一次性的 `127.0.0.1` 服务托管，交给本机的无头 Chromium 渲染，标记内容不会离开这台机器。页面里的 JavaScript 确实会执行，浏览器也会去请求页面自己引用的外部资源 —— 只渲染你信任的输入。
+
+## 安装
+
+按你使用的 agent / CLI 任选其一：
+
+```bash
+# ClawHub / OpenClaw
+clawhub install html-shot
+
+# skills.sh（Vercel skills CLI —— 适用于 Claude Code、Cursor 等）
+npx skills@1.7.2 add rockbenben/aishort-skills --skill html-shot
+```
+
+请像上面那样固定 CLI 版本：不带版本号时，安装器会在安装那一刻解析到仓库当时的版本，
+也就是你审过的安装器和真正跑起来的那个可能不是同一个。`--skill html-shot` 只装这一个技能，
+不会把仓库里的其他技能一起装上。
+
+或手动安装 —— clone 本仓库，把 `skills/html-shot/` 目录拷贝（或软链）进你的 agent 读取的
+skills 目录即可，只要是一个名为 `html-shot` 的目录，具体路径按你的 agent 文档来。
+
+## 会碰哪些东西
+
+范围就这么多：它在本地跑 `node`，读取你指定的输入文件，写出你指定的输出图片，不需要任何凭据。
+
+- **读取你指定的输入文件**，**把输出图片写到你指定的位置**。渲染本地文件时还会提供该文件所在
+  目录，以及最近一层项目的 `public/` 目录（或你显式指定的 `--base`）—— 你项目里的其他内容一概不碰。
+- **对 127.0.0.1 启动 Chromium**：本地文件走一次性的临时服务，远程输入则直接访问你给的 URL。
+- **除了你要渲染的 URL 以及那个页面自己请求的资源，不向任何地方发送数据**。不需要账号、API key、
+  cookie 或其他任何凭据。
+- **不碰其他技能**，不读别的技能的文件，不装开机自启项，不建定时任务，不起后台服务。工作文件只留在
+  你选的目录里，跨会话不会被记住。
 
 ## 支持范围
 
@@ -31,9 +62,19 @@
 - SVG 栅格化时用根元素的 width/height 补全缺失或非法的 `viewBox`，而不是渲染出一张空图。
 - 资源缺失或页面报错一律非零退出，写出来的图不会被当成成功结果。
 
+## 什么时候不要用这个技能
+
+- 只是说"网页截图"/"screenshot the page"，却没有给出输出文件、尺寸或格式 —— 那只是一次普通的页面截取，
+  不是要产出一个图片资源。先问清楚目标路径、像素尺寸和格式。如果对方要的是"给我看一眼"，而不是一份
+  交付文件，这个技能就不合适。
+- 只说"生成 og 图"/"turn this design into a 2x og image"，却没给源文件或 URL —— 先问清楚要渲染哪份
+  HTML 或 SVG。这个技能渲染的是你已有的源文件，它不会替你设计稿子。
+- 修改已有的位图（裁剪、修图、格式转换）—— 用图像编辑器。
+- 从数据生成图表或示意图 —— 用图表工具，需要图片时再把结果渲染出来。
+
 ## 快速开始
 
-技能装进任何读 `SKILL.md` 的代理 —— ClawHub、OpenClaw、Claude Code、Cursor —— 之后直接说你要什么：
+技能装进任何支持技能的代理 —— ClawHub、OpenClaw、Claude Code、Cursor —— 之后直接说你要什么：
 
 ```text
 把这张 og 卡渲染成 1200×630 的 PNG：card.html
@@ -67,7 +108,7 @@ node render.mjs template.example.html card.png
 | `--timeout MS`、`--max-pixels N` | 拦住失控的截图；默认 60 秒 / 6400 万像素 |
 | `--executable PATH`、`--channel NAME` | 使用已经装好的浏览器 |
 
-完整参数见 [references/cli.md](references/cli.md) · 图标预设见 [references/icons.md](references/icons.md) · 信任边界见 [references/security.md](references/security.md)
+完整参数见 [references/cli.md](references/cli.md) · 图标预设见 [references/icons.md](references/icons.md) · 起始模板见 [references/templates.md](references/templates.md) · 信任边界见 [references/security.md](references/security.md)
 
 ## 边界与限制
 

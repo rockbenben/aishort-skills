@@ -35,7 +35,10 @@ Control browser build, fonts, locale/language, source assets and output settings
 pixels matter. Bundled Chromium plus an npm lockfile pins the engine/dependencies, not the
 OS font rasteriser or all external content. Installed Chrome can update independently.
 
-Set HTML lang correctly. A system font stack depends on fonts installed on the host; Chinese,
+Set the HTML `lang` attribute when you know the content's language. It is optional, and
+any BCP-47 tag is accepted (`zh-CN`, `zh-TW`, `ja`, `ko`, `en`); omit it and the renderer
+uses the host default. The skill does not impose a language. A system font stack depends
+on fonts installed on the host; Chinese,
 Japanese and Korean glyph variants can differ. If licensing permits, package required fonts in
 an asset-only directory. `document.fonts.ready` settles font loading but does not prove that
 the chosen face loaded or that every glyph exists; inspect CJK, emoji and mixed-script output.
@@ -66,4 +69,11 @@ For local templates, an environment-provided Chromium is often the simplest opti
 host exposes a shared browser for remote websites, follow its browser/sign-in rules rather
 than launching a second hidden remote browsing session. This standalone renderer is not an
 authentication workflow and does not inherit a user's login.
+
+On Linux, missing CJK/emoji fonts and missing Chromium shared libraries are host gaps, not
+skill gaps. Installing a font package (for example Debian/Ubuntu's `fonts-noto-cjk` and
+`fonts-noto-color-emoji`) is optional, Linux-only, and only needed when the user wants CJK
+or emoji glyphs and the host does not already have them. It requires administrator rights,
+so it belongs to the environment's setup or approval process — the skill never runs a
+privileged install on its own.
 

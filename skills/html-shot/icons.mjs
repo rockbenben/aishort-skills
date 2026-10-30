@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 /** Build platform-specific icon sets. See references/icons.md. */
-import { spawnSync } from "node:child_process";
 import {
   existsSync,
   statSync,
@@ -15,6 +14,7 @@ import {
 import { dirname, resolve, extname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { svgRootInfo, sameFile, assertBudget, safeUrl, skillVersion } from "./lib.mjs";
+import { renderImage, redactToken } from "./render.mjs";
 
 const HELP = `html-shot icons — build a favicon/app icon set
 Usage: node icons.mjs <source.svg|html|png|url> <existing-outdir> [options]
@@ -42,7 +42,6 @@ async function main() {
   if (major < 20 || (major === 20 && minor < 9))
     throw new Error("requires Node >=20.9");
   const SKILL_DIR = dirname(fileURLToPath(import.meta.url));
-  const RENDER = resolve(SKILL_DIR, "render.mjs");
 
   let sharp, png2icons;
   function fail(msg) {
@@ -349,7 +348,6 @@ async function main() {
           );
       }
       const args = [
-        RENDER,
         src,
         outPath,
         "--width",
@@ -371,19 +369,41 @@ async function main() {
       ])
         if (opts[f] !== undefined) args.push(`--${f}`, opts[f]);
       if (opts.offline) args.push("--offline");
-      // The flag loop above bounds --timeout to [1, 3_600_000], so the child's
-      // budget is always inside the range and never needs a second check.
-      const childTimeout = Number(opts.timeout ?? 60_000) + 15_000;
-      const r = spawnSync(process.execPath, args, {
-        timeout: childTimeout,
-        stdio: ["ignore", "pipe", "inherit"],
-        encoding: "utf8",
-      });
-      if (r.error) fail(`could not run render.mjs: ${r.error.message}`);
-      if (r.status !== 0 || !existsSync(outPath))
-        fail(
-          `rendering ${basename(src)} failed (render.mjs exited ${r.status}) — see the notes above`,
+      // The same engine the render CLI runs, called in-process. Its result line
+      // goes nowhere (the icon set prints its own summary) and its notes stay on
+      // stderr, exactly as they did when this ran as a child process.
+      //
+      // The flag loop above bounds --timeout to [1, 3_600_000], so the budget
+      // below is always inside the range and never needs a second check. The
+      // engine's own deadline closes the browser at --timeout; this backstop
+      // covers the encoding work that follows it.
+      const budget = Number(opts.timeout ?? 60_000) + 15_000;
+      let watchdog;
+      const overran = new Promise((_, reject) => {
+        watchdog = setTimeout(
+          () => reject(new Error(`the render did not finish within ${budget} ms`)),
+          budget,
         );
+      });
+      let result;
+      try {
+        result = await Promise.race([
+          renderImage(args, { log: () => {} }),
+          overran,
+        ]);
+      } catch (e) {
+        // The render CLI redacts the per-run server token and URL credentials
+        // before printing an error; do the same here, because this message is
+        // printed by icons.mjs.
+        const detail = redactToken(
+          e?.message?.split("\n")[0] || String(e),
+        ).replace(/https?:\/\/[^\s"'<>]+/gi, safeUrl);
+        fail(`rendering ${basename(src)} failed: ${detail}`);
+      } finally {
+        clearTimeout(watchdog);
+      }
+      if (result.failed || !existsSync(outPath))
+        fail(`rendering ${basename(src)} failed — see the notes above`);
     }
     return readFileSync(outPath);
   }

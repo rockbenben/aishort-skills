@@ -24,7 +24,7 @@ import {
 // The per-run server token is a 32-hex hostname. main() redacts it with the real
 // token; this shape-based fallback covers the top-level catch, where that binding
 // is out of scope.
-const redactToken = (value) => String(value).replace(/\b[a-f0-9]{32}\.localhost\b/gi, "<token>.localhost");
+export const redactToken = (value) => String(value).replace(/\b[a-f0-9]{32}\.localhost\b/gi, "<token>.localhost");
 const HELP = `html-shot — render trusted HTML/SVG or HTTP(S) to an image
 Usage: node render.mjs <input> <output.png|jpg|webp> [options]
   --width N --height N   CSS viewport/capture dimensions (auto from body by default)
@@ -40,17 +40,17 @@ Usage: node render.mjs <input> <output.png|jpg|webp> [options]
   --allow-missing       Keep warnings but exit 0 for failed subresources
   --help | --version
 Details: references/cli.md. HTML executes JavaScript; this is not a security sandbox.`;
-const args = process.argv.slice(2);
-if (args.length === 1 && ["--help", "-h"].includes(args[0])) {
-  console.log(HELP);
-  process.exit(0);
-}
-if (args.length === 1 && args[0] === "--version") {
-  console.log(skillVersion(dirname(fileURLToPath(import.meta.url))));
-  process.exit(0);
-}
-async function main() {
-  const SKILL_DIR = dirname(fileURLToPath(import.meta.url));
+const SKILL_DIR = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Render one input to one image file.
+ *
+ * This is the engine behind both entry points: render.mjs calls it from the CLI
+ * below, and icons.mjs calls it in-process to build an icon master. Callers pass
+ * their own argv so neither has to spawn the other, and `log` lets the CLI keep
+ * its result line on stdout while a library caller stays quiet.
+ */
+export async function renderImage(argv, { log = console.log } = {}) {
   const PW_CLI = resolve(SKILL_DIR, "node_modules/playwright/cli.js");
   const INSTALL_HINT = `cd "${SKILL_DIR}" && npm ci && node "${PW_CLI}" install chromium`;
 
@@ -79,7 +79,7 @@ async function main() {
   }
   const warn = (msg) => console.error(`html-shot: note — ${msg}`);
 
-  const [inputArg, output, ...rest] = process.argv.slice(2);
+  const [inputArg, output, ...rest] = argv;
   if (!inputArg || !output) fail("missing <input> or <output>; use --help");
 
   const VALUE_FLAGS = new Set([
@@ -891,19 +891,54 @@ async function main() {
 
   const problemCount = problems.size;
   if (problemCount) {
-    console.log(
+    log(
       `⚠ ${output}  ${info.width}×${info.height}  ${format} — written, but ${problemCount} resource/runtime issue(s) did not load (notes above)`,
     );
-    if (!opts["allow-missing"]) process.exitCode = 1;
   } else {
-    console.log(`✔ ${output}  ${info.width}×${info.height}  ${format}`);
+    log(`✔ ${output}  ${info.width}×${info.height}  ${format}`);
+  }
+  return { problems: problemCount, failed: problemCount > 0 && !opts["allow-missing"] };
+}
+
+// CLI entry point. The engine above is also called in-process by icons.mjs, so
+// everything that belongs to "running as a command" lives here.
+async function main() {
+  const args = process.argv.slice(2);
+  if (args.length === 1 && ["--help", "-h"].includes(args[0])) {
+    console.log(HELP);
+    return;
+  }
+  if (args.length === 1 && args[0] === "--version") {
+    console.log(skillVersion(SKILL_DIR));
+    return;
+  }
+  const { failed } = await renderImage(args);
+  if (failed) process.exitCode = 1;
+}
+
+// Only run the CLI when this file is the program that was invoked. icons.mjs
+// imports renderImage from here, and importing a module must not start a render.
+// realpath keeps a symlinked skill directory working; the case fold covers
+// Windows drive-letter and file-name casing.
+function invokedDirectly() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    const a = realpathSync(entry);
+    const b = realpathSync(fileURLToPath(import.meta.url));
+    return process.platform === "win32"
+      ? a.toLowerCase() === b.toLowerCase()
+      : a === b;
+  } catch {
+    return false;
   }
 }
-main().catch((error) => {
-  const message = redactToken(error?.message?.split("\n")[0] || String(error)).replace(
-    /https?:\/\/[^\s"'<>]+/gi,
-    safeUrl,
-  );
-  console.error(`html-shot: ${message}`);
-  process.exitCode = 1;
-});
+if (invokedDirectly()) {
+  main().catch((error) => {
+    const message = redactToken(
+      error?.message?.split("\n")[0] || String(error),
+    ).replace(/https?:\/\/[^\s"'<>]+/gi, safeUrl);
+    console.error(`html-shot: ${message}`);
+    process.exitCode = 1;
+  });
+}
