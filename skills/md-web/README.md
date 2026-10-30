@@ -20,6 +20,12 @@ Pin the CLI version as shown. An unpinned `npx skills add …` resolves whatever
 registry serves at install time, so the installer you review is not the installer that
 runs.
 
+That pins the **installer**, not the **content**. The fetched skill is still whatever the
+repository serves at install time; what pins the content is the skill's own released
+version, so install a release you have read and re-run the install after an upgrade —
+the version is in `skills/md-web/SKILL.md`. Reviewing the installer does not review the
+skill: read the skill before you install it.
+
 Or install manually — clone this repo and copy (or symlink) the `skills/md-web/` folder
 into the skills directory your agent reads from. A single folder named `md-web` is all
 it needs; use whichever path your agent documents.
@@ -29,8 +35,38 @@ it needs; use whichever path your agent documents.
 1. Install the skill (see above)
 2. On first use, the AI will guide you through bucket configuration
 3. The AI then provisions the viewer once — a separate step that writes the page shell
-   and its assets to your bucket, and again after any upgrade of the skill
+   and its assets to your bucket, and again after any upgrade of the skill. It asks
+   you first, because that step rewrites shared state at the bucket root.
 4. After that, tell the AI "share as a link" whenever you want to publish content as a web page
+
+## What this touches
+
+The complete list of what this skill does. Nothing outside it happens.
+
+- **Publishing one document** writes **exactly one object** — `md-web/<timestamp>-<slug>-<suffix>.md`
+  — under the `md-web/` prefix of your bucket. It writes nothing else and deletes nothing.
+- **Provisioning the viewer** (`--setup`) is a **separate command**, never a side effect of
+  publishing. It **overwrites the viewer files at the bucket root** (`index.html`,
+  `README.md`, `assets/`) — shared state that every published link depends on.
+- **`expire_days`** is the only bucket administration, and it is **off unless you set it**.
+  With it set, the setup step **reads** your bucket's lifecycle configuration and writes
+  back **one rule of its own**, scoped to the `md-web/` prefix; `0` removes that rule
+  again. Every other rule and every bucket-wide setting is preserved, and the uploads
+  under that prefix are **auto-deleted after N days**.
+- **Local files:** it reads `~/.md-web/config.json` (your credentials and bucket settings)
+  and writes `~/.md-web/.deployed` (a deploy fingerprint).
+- **Nothing else.** No other bucket, no other key prefix, no other skill's files, no
+  startup entry, no scheduled job, no background service, no third-party service, no
+  telemetry.
+
+Scope in one line: it runs `node` locally, reads `~/.md-web/config.json` (or
+`MD_WEB_ACCESS_KEY` / `MD_WEB_SECRET_KEY`), makes HTTPS requests **only** to the S3
+endpoint you configured, writes the uploaded `.md` plus the viewer assets, may write one
+lifecycle rule scoped to the `md-web/` prefix, creates and deletes at most one temporary
+file, touches no other skill, and installs nothing.
+
+Every state-changing step — publishing an object, provisioning the viewer, adding or
+changing `expire_days` — needs your go-ahead first; the AI asks before each one.
 
 ## Bucket Setup
 
@@ -114,8 +150,10 @@ instead. Re-run the one-time setup step after changing it.
 
 - **Anything you upload is publicly accessible** at the returned URL, and there is no un-publish step (unless `expire_days` is set, which auto-deletes the uploaded file after N days) — never upload secrets, API keys, PII, or other sensitive content.
 - Credentials live in **plaintext** in `~/.md-web/config.json`, or in `MD_WEB_ACCESS_KEY` / `MD_WEB_SECRET_KEY` if you prefer to keep them out of a file. On macOS and Linux the script tightens the config file to owner-only access; protect it either way — don't commit it or share it.
+- **No elevated privileges.** That owner-only tightening is the only permission change the skill makes: a user-scoped change to a file in your own home directory, made by the script running as you. It never asks for root, never runs an elevated command, and touches no file outside your home directory and the bucket you configured.
 - **Use a dedicated bucket.** Uploads and any expiry rule are namespaced under `md-web/`, but a dedicated bucket keeps this skill's bucket-administration rights away from anything you actually care about.
-- **The viewer renders your Markdown as HTML**, so `<details>` blocks, alignment and inline images work. Two things keep that safe: a route guard that only loads same-origin paths under `md-web/` (a crafted link cannot make the viewer fetch a document from another origin), and a Content-Security-Policy without `'unsafe-inline'`, so HTML inside a document cannot run script. Treat the domain as public either way.
+- **The viewer runs your Markdown as HTML on the page.** GFM, tables, `<details>` and inline HTML all render. Two things keep that in bounds: a route guard that only loads same-origin paths under `md-web/` (a crafted link cannot make the viewer fetch a document from another origin), and a Content-Security-Policy without `'unsafe-inline'`, so HTML inside a document cannot run script. What the policy does **not** stop is a document *inserting elements* into the page — so never publish Markdown that came from an untrusted source, and never let a document carry markup you did not write yourself. Readers should treat the page as public and untrusted: anyone who can write to the bucket can put content there.
+- **Language is yours.** This skill imposes no language requirement on the document you upload — publish it in the language its content is written in. The English README and the Chinese one (`README.zh.md`) describe the same skill; pick whichever you prefer, neither is required. The viewer's own chrome is English (`MD Web`, `Search`, `No results found`); the word counter follows the uploaded document's own content. Nothing here translates, rewrites or checks the language of what you upload.
 
 ## File Structure
 

@@ -101,6 +101,9 @@
     toc: {
       scope: ".markdown-section",
       headings: "h2, h3, h4, h5, h6",
+      // Deliberately empty. The bundled table-of-contents plugin writes this
+      // string into the page with innerHTML, so any title here would be an HTML
+      // sink fed from configuration. Empty leaves the plugin nothing to inject.
       title: "",
     },
 
@@ -115,6 +118,61 @@
           var h = document.querySelector(".markdown-section h1, .markdown-section h2");
           var t = h && h.textContent ? h.textContent.trim() : "";
           document.title = t || fallback;
+        });
+      },
+      function (hook) {
+        // Two things the bundled plugins get wrong for a page that renders a
+        // document the skill did not write. Both are fixed here, in the file we
+        // own, rather than in the vendored builds.
+        //
+        // 1. The word-count plugin hard-codes language:"english" in its own
+        //    defaults, so a Chinese document would get an English counter. The
+        //    skill imposes no language on the document — the counter follows
+        //    the document's own content, per document, at render time. The
+        //    plugin reads the value when it renders, so setting it here is
+        //    enough; the range below is the one the plugin itself counts.
+        //
+        // 2. The table-of-contents plugin writes each entry with innerHTML,
+        //    copying the heading's markup into a second place in the page. A
+        //    heading in an uploaded document can carry raw HTML, so that copy
+        //    turns document markup into live DOM. The entry is reduced to the
+        //    inline formatting the sidebar styles expect (span, em, strong,
+        //    code, br) with every attribute stripped, so it can only be text.
+        var CJK = /[\u4e00-\u9fff]/;
+        var TOC_INLINE = { SPAN: 1, EM: 1, STRONG: 1, B: 1, I: 1, CODE: 1, BR: 1, DEL: 1, S: 1 };
+
+        hook.beforeEach(function (markdown) {
+          var counter = window.$docsify.count;
+          if (counter) {
+            counter.language = CJK.test(String(markdown || "")) ? "chinese" : "english";
+          }
+          return markdown;
+        });
+
+        hook.doneEach(function () {
+          var entries = document.querySelectorAll(".page_toc a");
+          for (var i = 0; i < entries.length; i++) {
+            var nodes = entries[i].querySelectorAll("*");
+            for (var j = 0; j < nodes.length; j++) {
+              var node = nodes[j];
+              if (!node.parentNode) continue;
+              if (!TOC_INLINE[node.nodeName]) {
+                node.parentNode.removeChild(node);
+                continue;
+              }
+              // An inline element may still carry an event handler or a URL
+              // that came out of the document; the sidebar only needs the text.
+              var attrs = node.attributes;
+              for (var k = attrs.length - 1; k >= 0; k--) {
+                node.removeAttribute(attrs[k].name);
+              }
+            }
+          }
+          // The plugin's title element is filled with innerHTML too. The title
+          // above is empty, so this only keeps it that way if a configuration
+          // ever changes.
+          var title = document.querySelector(".page_toc p.title");
+          if (title) title.textContent = title.textContent;
         });
       },
     ],

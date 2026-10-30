@@ -4,6 +4,13 @@ Instant Markdown sharing — paste a link, read a beautifully rendered page.
 
 即时 Markdown 分享 —— 打开链接，阅读排版精美的页面。
 
+Both languages are shown side by side here so that either reader can use the page —
+take whichever you prefer, neither is required, and the document you open is rendered
+in the language it was written in.
+
+两种语言在本页并排呈现，任何语言的读者都能直接使用 —— 随你选择，都不是必须的；
+你打开的文档，按它原本写成的语言渲染。
+
 ## Looking for a document? / 找文档？
 
 If you arrived here without a specific document, the link you need should look like:
@@ -29,7 +36,10 @@ Check the link you received and make sure the `#/document-name` part is included
 
 Rendered by [MD Web](https://github.com/rockbenben/aishort-skills/tree/main/skills/md-web).
 It loads Markdown only from its own bucket, and a link whose route points anywhere else
-is refused rather than rendered.
+is refused rather than rendered. Documents are rendered as HTML, so read a published page
+as untrusted content — never enter credentials into a page you did not expect to be this one.
 
 本页由 [MD Web](https://github.com/rockbenben/aishort-skills/tree/main/skills/md-web) 渲染：
 只加载自家存储桶里的 Markdown，任何指向别处的文档路由都会被拒绝而不是照常渲染。
+文档按 HTML 渲染，所以请把已发布页面当作不可信的内容来阅读 —— 除非你本就预期看到这个页面，
+否则不要在其中输入任何凭证。
