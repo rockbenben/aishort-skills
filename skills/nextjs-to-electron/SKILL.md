@@ -1,7 +1,7 @@
 ---
 name: nextjs-to-electron
-version: 1.1.7
-description: Use when packaging a Next.js static export as a Windows Electron app, notably offline/intranet boxes with no WebView2. Triggers on Electron 桌面版 / 打包成 exe.
+version: 1.1.8
+description: Use when packaging a Next.js static export as a Windows Electron app, notably offline/intranet boxes with no WebView2. Triggers on Electron 桌面版 / 打包成 exe / package Next.js as an Electron desktop app / wrap a Next.js app in Electron.
 
 metadata:
   openclaw:
@@ -49,6 +49,12 @@ copy of the CI major; `.nvmrc` is optional. For `electron-builder`/`electron-upd
 flag newer GitHub releases.
 
 **Do NOT use when** the app needs a live Node server at runtime (real API routes, SSR, server actions). **Prefer `nextjs-to-tauri`** when the targets have WebView2 and you want a ~3–10 MB exe with auto-update — Electron is ~150 MB because it ships Chromium.
+
+**Trigger phrases** — Chinese and English are both supported, and the agent matches on either:
+Electron 桌面版 / 打包成 exe / package Next.js as an Electron desktop app /
+wrap a Next.js app in Electron.
+
+**Not this skill if** the request is only 「打包成 exe」 / "build me an exe" for something that is **not** a Next.js static export — a plain HTML/CSS/JS site, a Python or Go program, or an app that is meant to stay on the web. This playbook only covers wrapping a Next.js export in an Electron shell.
 
 This playbook targets **Windows** (`--win dir`/`portable`, SmartScreen, WebView2-less boxes). macOS/Linux packaging (`.dmg`/`.AppImage`, notarization, codesigning) is out of scope.
 

@@ -1,6 +1,6 @@
 # Electron files (copy-paste templates)
 
-All paths relative to the Next.js project root. The web source (`src/`, `messages/`, `next.config.*`) is **not** edited. Comments are English here; adapt names (`TextDiff`, `app://local`, the `LOCALES` list, `appId`) to your app.
+All paths relative to the Next.js project root. The web source (`src/`, `messages/`, `next.config.*`) is **not** edited. The template's comments are written in English; rename or translate them if you prefer — they are yours to change. Adapt names (`TextDiff`, `app://local`, the `LOCALES` list, `appId`) to your app.
 
 ## Layout
 
