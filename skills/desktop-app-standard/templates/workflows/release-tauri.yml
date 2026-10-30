@@ -1,0 +1,217 @@
+# .github/workflows/release.yml — Tauri v2, multi-platform, draft → verify → publish.
+# desktop-app-standard house style. Must live on the DEFAULT branch;
+# a tag push runs the workflow file *as it exists in the tagged commit*.
+#
+# Flow: validate (tag ⇄ version, tests) → build matrix (tauri-action uploads to ONE draft)
+#       → publish (verify assets + latest.json, SHA256SUMS, attest, approve, publish, check latest)
+#       → winget (optional, after publish).
+# Secrets: TAURI_SIGNING_PRIVATE_KEY(+_PASSWORD) mandatory when the updater is enabled.
+#          APPLE_* optional (without them: ad-hoc sign via bundle.macOS.signingIdentity "-").
+#          Windows signing: configure bundle.windows.signCommand (Azure Artifact Signing) in tauri.conf.
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag: { description: 'Existing tag to rebuild, e.g. v1.2.3', required: true }
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with: { ref: '${{ env.TAG }}' }
+      - id: version
+        name: Tag is the single version source
+        shell: bash
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::$TAG is not vX.Y.Z"; exit 1; }
+          v="${TAG#v}"
+          pkg=$(node -p "require('./package.json').version")
+          conf=$(node -p "require('./src-tauri/tauri.conf.json').version ?? ''")
+          [ "$pkg" = "$v" ] || { echo "::error::version mismatch: package.json $pkg != tag $v"; exit 1; }
+          [ "$conf" = "../package.json" ] || [ "$conf" = "$v" ] || { echo "::error::version mismatch: tauri.conf.json $conf"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v7
+        with: { node-version: 26, cache: npm }
+      - run: npm ci                     # Yarn 1: yarn install --frozen-lockfile · Yarn 4: corepack enable + yarn install --immutable
+      - run: npm run lint && npm test
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: './src-tauri -> target' }
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  draft:                                 # ONE draft created up front: parallel tauri-action jobs would race to create duplicates
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    outputs:
+      id: ${{ steps.d.outputs.id }}
+    env: { GH_TOKEN: '${{ github.token }}', REPO: '${{ github.repository }}' }
+    steps:
+      - id: d
+        run: |
+          id=$(gh api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -1)
+          if [ -z "$id" ]; then
+            pre=""; case "$TAG" in *-*) pre="--prerelease";; esac
+            gh release create "$TAG" -R "$REPO" --draft --verify-tag $pre --title "$TAG" --notes "See CHANGELOG.md for details."
+            id=$(gh api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -1)
+          fi
+          [ "$(gh api "repos/$REPO/releases/$id" --jq .draft)" = true ] || { echo "::error::$TAG is already published; bump the version (immutable releases cannot be rebuilt)"; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: [validate, draft]
+    permissions:
+      contents: write                    # tauri-action creates/uploads to the draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest,   target: x86_64-pc-windows-msvc,    args: '--target x86_64-pc-windows-msvc' }
+          - { os: windows-latest,   target: aarch64-pc-windows-msvc,   args: '--target aarch64-pc-windows-msvc --bundles nsis' }  # cross-compiled ARM64; VERIFY on first run
+          - { os: macos-latest,     target: aarch64-apple-darwin,      args: '--target aarch64-apple-darwin' }
+          - { os: macos-latest,     target: x86_64-apple-darwin,       args: '--target x86_64-apple-darwin' }
+          - { os: ubuntu-22.04,     target: x86_64-unknown-linux-gnu,  args: '--bundles deb,appimage,rpm' }   # 22.04 = older glibc → wider AppImage/deb reach
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, args: '--bundles deb,appimage,rpm' }   # free for public repos; private repos: VERIFY runner availability
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with: { ref: '${{ env.TAG }}' }
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils
+      - uses: actions/setup-node@v7
+        with: { node-version: 26, cache: npm }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: '${{ matrix.target }}' }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: './src-tauri -> target', key: '${{ matrix.target }}' }
+      - run: npm ci
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS Developer ID + notarization (optional until you have an Apple account)
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows: Azure Artifact Signing via signCommand in tauri.conf (optional until public)
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        with:
+          releaseId: ${{ needs.draft.outputs.id }}   # upload into the single draft (tag already asserted == app version)
+          # latest.json is merged per job; publish re-checks every platform key, so a lost merge fails loudly → rerun that job
+          updaterJsonPreferNsis: true      # latest.json → NSIS (default would prefer MSI)
+          # tauriScript unset: the action picks the runner from the lockfile (npm run/exec tauri, adds `--` itself)
+          args: ${{ matrix.args }}
+
+  publish:
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    environment: release                 # protect with required reviewers = human approval gate
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - name: Exactly one draft for this tag
+        run: |
+          n=$(gh api "repos/$REPO/releases?per_page=100" --jq "[.[] | select(.tag_name==\"$TAG\" and .draft)] | length")
+          [ "$n" = 1 ] || { echo "::error::expected 1 draft for $TAG, found $n (parallel jobs created duplicates?)"; exit 1; }
+      - name: Download draft assets   # gh resolves drafts by tag for authenticated callers
+        run: gh release download "$TAG" -R "$REPO" -D dist
+      - name: Verify updater feed and per-platform installers
+        run: |
+          cd dist
+          jq -e --arg v "$VERSION" '.version == $v' latest.json
+          for p in windows-x86_64 windows-aarch64 darwin-aarch64 darwin-x86_64 linux-x86_64 linux-aarch64; do
+            url=$(jq -r --arg p "$p" '.platforms[$p].url // empty' latest.json)
+            sig=$(jq -r --arg p "$p" '.platforms[$p].signature // empty' latest.json)
+            [ -n "$url" ] && [ -n "$sig" ] || { echo "::error::latest.json missing $p"; exit 1; }
+            # tauri-action v1 has emitted API asset URLs (/releases/assets/<id>) in
+            # latest.json, not only browser download URLs. Resolve both shapes to
+            # the asset name before checking the downloaded files.
+            if [[ "$url" == *"api.github.com/repos/"*"/releases/assets/"* ]]; then
+              asset_id="${url%%\?*}"; asset_id="${asset_id##*/}"
+              name="$(gh api "repos/$REPO/releases/assets/$asset_id" --jq .name)"
+            else
+              name="$(basename "${url%%\?*}")"
+            fi
+            [ -n "$name" ] && [ -f "$name" ] || { echo "::error::$p points to missing asset $url"; exit 1; }
+          done
+          # One class at a time, so a missing artifact names WHICH class is missing
+          # instead of failing with an opaque `ls` error. The Linux bundle set is
+          # pinned in the build matrix; the Windows/macOS classes come from the app's
+          # own tauri.conf (house style: NSIS + dmg), and this loop names whichever is
+          # absent instead of letting a config change drop a class silently.
+          for f in '*-setup.exe' '*.dmg' '*.AppImage' '*.deb' '*.rpm'; do
+            ls -- $f >/dev/null 2>&1 || { echo "::error::release assets have no $f"; exit 1; }
+          done
+      - name: SHA256SUMS (LF, generated on Linux)
+        run: |
+          cd dist && rm -f SHA256SUMS && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+          gh release upload "$TAG" -R "$REPO" SHA256SUMS --clobber
+      - uses: actions/attest@v4
+        with: { subject-checksums: dist/SHA256SUMS }
+      - name: Publish and make latest
+        run: |
+          id=$(gh api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name==\"$TAG\" and .draft) | .id")
+          latest=true; case "$TAG" in *-*) latest=false;; esac
+          gh api -X PATCH "repos/$REPO/releases/$id" -F draft=false -f make_latest=$latest >/dev/null
+      - name: Post-release verification (anonymous, like a real user)
+        if: ${{ !contains(env.TAG, '-') }}
+        run: |
+          [ "$(gh api "repos/$REPO/releases/latest" --jq .tag_name)" = "$TAG" ] || { echo "::error::releases/latest is not $TAG"; exit 1; }
+          # the API is the judge; the download redirect can lag a few minutes behind it
+          for _ in $(seq 1 10); do
+            curl -fsSL "https://github.com/$REPO/releases/latest/download/latest.json" | jq -e --arg v "$VERSION" '.version == $v' && exit 0
+            sleep 60
+          done
+          echo "::error::public latest.json still not $VERSION after 10 min"; exit 1
+
+  # --- winget -------------------------------------------------------------------------------
+  # **清单不在这个仓里提交。** winget 的清单归 winget-manifests：那边的 apps.json 是唯一源，
+  # 它自己巡检各发布仓的 release，发现新版本就重生成 manifest、往 winget-pkgs 开 PR。
+  # 本仓只管把 release 发出去；把新应用加进 apps.json 即可。不要在这里再开第二条提交路径——
+  # 两条路写同一个包，第二个 PR 会被当重复拒掉，看起来就像「winget 坏了」。
+  # 不在那个流水线里的发布者，才用下面注释掉的 winget-releaser 写法。
+  #   winget:                                # optional; delete if not on winget. First version must be submitted manually.
+  #     needs: publish
+  #     if: ${{ !contains(inputs.tag || github.ref_name, '-') && vars.WINGET_ID != '' }}
+  #     runs-on: ubuntu-latest
+  #     steps:
+  #       - name: Token preflight
+  #         env: { WINGET_TOKEN: '${{ secrets.WINGET_TOKEN }}' }
+  #         run: '[ -n "$WINGET_TOKEN" ] || { echo "::error::WINGET_TOKEN (classic PAT: public_repo, workflow) missing"; exit 1; }'
+  #       - uses: vedantmgoyal9/winget-releaser@v2
+  #         with:
+  #           identifier: ${{ vars.WINGET_ID }}
+  #           release-tag: ${{ env.TAG }}
+  #           installers-regex: '-setup\.exe$'
+  #           max-versions-to-keep: 5
+  #           token: ${{ secrets.WINGET_TOKEN }}

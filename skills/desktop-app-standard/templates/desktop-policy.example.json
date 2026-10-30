@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 2,
+  "status": "house-style-default",
+  "verifiedOn": "2026-10-27",
+  "framework": "tauri | electron",
+  "channel": "stable",
+  "platforms": ["windows-x64", "windows-arm64", "macos-arm64", "macos-x64", "linux-x64", "linux-arm64"],
+  "packageManager": "npm (npm ci in CI; existing Yarn/pnpm repos keep their lockfile, Yarn 1 uses --frozen-lockfile)",
+  "node": "Active LTS (resolve against the nodejs/Release schedule; audit.mjs reports drift)",
+  "distribution": {
+    "primary": "github-releases",
+    "secondary": ["winget (manifests owned by winget-manifests/apps.json, not by this repo)"],
+    "windows": "nsis (portable zip optional, never the updatable artifact)",
+    "macos": "dmg (+ zip for Electron updater; .app.tar.gz for Tauri updater)",
+    "linux": "AppImage (updatable) + deb + rpm"
+  },
+  "updater": "in-app, mandatory",
+  "signing": {
+    "tauriUpdaterKey": "mandatory, never rotated without a bridge release",
+    "windows": "Azure Artifact Signing once public; unsigned only with a release-note warning",
+    "macos": "Developer ID + notarization; Tauri fallback ad-hoc ('-') with open instructions; Electron unsigned = no macOS auto-update",
+    "linux": "none at OS level; SHA256SUMS + provenance attestation"
+  },
+  "versionSource": "git tag vX.Y.Z; package.json (and tauri.conf version '../package.json') asserted equal",
+  "release": "single draft → verify → protected-environment approval → publish + make_latest → anonymous feed check",
+  "actionPins": "major tags (resolve the current major with audit.mjs suggestedPin); exact version when tighter is needed; never full SHA",
+  "immutableReleases": "enabled once the pipeline is stable",
+  "deviations": [
+    { "rule": "platforms", "value": ["windows-x64", "macos-arm64"], "reason": "example: no arm64 test hardware yet", "revisitWhen": "first arm64 user report or 2027-01-01" },
+    { "rule": "windows-unsigned", "reason": "example: certificate not issued yet; SmartScreen note in release body", "revisitWhen": "Azure Artifact Signing approved" }
+  ],
+  "notes": "audit.mjs reads `platforms` and `deviations[]` only. rule == 'platforms' narrows the platform matrix; rule == <finding id> (e.g. windows-unsigned) moves that finding to 'accepted' (not counted in P0/P1/P2). A deviation without reason + revisitWhen is reported as drift. Everything else is guidance for the agent."
+}

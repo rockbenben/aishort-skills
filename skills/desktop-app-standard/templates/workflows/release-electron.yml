@@ -1,0 +1,257 @@
+# .github/workflows/release.yml — Electron + electron-builder + electron-updater, multi-platform.
+# desktop-app-standard house style. Must live on the DEFAULT branch.
+#
+# Flow: validate (tag ⇄ version, tests) → build (one job per OS, ALL arches of that OS in the same job
+#       so latest*.yml is not overwritten; --publish never) → publish (single job: verify manifests,
+#       draft, SHA256SUMS, attest, approve, publish, check latest + anonymous feed) → winget (optional).
+# electron-builder config owns the target lists (house style):
+#   win:   { target: [nsis] }
+#   mac:   { target: [dmg, zip] }
+#   linux: { target: [AppImage, deb, rpm] }
+# It also needs `publish: { provider: github }` so latest*.yml and app-update.yml are produced.
+# The matrix below passes only architectures, so editing the config stays authoritative
+# (a target name on the command line would override the config's list).
+# Signing is configured in electron-builder config + env below; empty secrets = unsigned build
+# (Windows: SmartScreen warning → say so in release notes; macOS: auto-update requires signing).
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag: { description: 'Existing tag to rebuild, e.g. v1.2.3', required: true }
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with: { ref: '${{ env.TAG }}' }
+      - id: version
+        name: Tag is the single version source
+        shell: bash
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::$TAG is not vX.Y.Z"; exit 1; }
+          v="${TAG#v}"; pkg=$(node -p "require('./package.json').version")
+          [ "$pkg" = "$v" ] || { echo "::error::version mismatch: package.json $pkg != tag $v"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v7
+        with: { node-version: 26, cache: npm }
+      - run: npm ci                     # Yarn 1: yarn install --frozen-lockfile · Yarn 4: corepack enable + yarn install --immutable
+      - run: npx install-electron       # Electron >= 42: no postinstall download any more (yarn: yarn run install-electron)
+      - run: npm run lint && npm test
+
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, name: win,   args: '--win --x64 --arm64' }   # one NSIS installer + one latest.yml for both arches
+          - { os: macos-latest,   name: mac,   args: '--mac --x64 --arm64' }   # zip is required by the macOS updater (see electron-builder.yml)
+          - { os: ubuntu-22.04,   name: linux, args: '--linux --x64 --arm64' } # AppImage is the auto-updating format; native modules need an arm runner instead
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with: { ref: '${{ env.TAG }}' }
+      - uses: actions/setup-node@v7
+        with: { node-version: 26, cache: npm }
+      - run: npm ci
+      - run: npx install-electron
+      - run: npm run build               # renderer/main bundling
+      - name: Build
+        # shell: bash — the Windows runner's default shell is PowerShell, and the
+        # script below is bash. Without this the Windows leg dies with a
+        # ParserError while macOS/Linux pass — looks like a platform problem.
+        shell: bash
+        env:
+          # ⚠️ GitHub renders a MISSING secret as an EMPTY STRING, not as an unset
+          # variable — and electron-builder reads an empty CSC_LINK as "the
+          # certificate is this path": it resolves it against the working
+          # directory and the build dies with
+          #   /Users/runner/work/<repo>/<repo> not a file
+          # (verified on a real macOS leg: Windows and Linux passed, macOS did
+          # not). So the secrets are collected under different names here and
+          # only exported under the names electron-builder reads when they are
+          # actually present. No credentials = an explicitly UNSIGNED build.
+          #
+          # macOS Developer ID + notarization (electron-builder ≥ 27 reads mac signing from mac.sign; VERIFY on upgrade)
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          MAC_CSC_IDENTITY: ${{ secrets.MAC_CSC_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows: Azure Artifact Signing via win.azureSignOptions in electron-builder config
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          # Don't scan the keychain: on CI the signing identity must come from
+          # the given credentials only, or the result depends on the runner image.
+          export CSC_IDENTITY_AUTO_DISCOVERY=false
+          if [ -n "$MAC_CSC_LINK" ]; then
+            export CSC_LINK="$MAC_CSC_LINK"
+            export CSC_KEY_PASSWORD="$MAC_CSC_KEY_PASSWORD"
+          fi
+          if [ -n "$MAC_CSC_IDENTITY" ]; then
+            export CSC_IDENTITY="$MAC_CSC_IDENTITY"
+          fi
+          if [ -n "$APPLE_ID" ]; then
+            export APPLE_ID
+            export APPLE_APP_SPECIFIC_PASSWORD
+            export APPLE_TEAM_ID
+          fi
+          npx electron-builder ${{ matrix.args }} --publish never
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.zip
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
+            dist/*.blockmap
+            dist/latest*.yml
+
+  publish:
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    environment: release                 # required reviewers = human approval gate
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with: { pattern: 'dist-*', merge-multiple: true, path: dist }
+      # electron-builder renames assets when IT uploads them: GitHub only allows
+      # [0-9A-Za-z._-] in asset names, so "my-app Setup 1.0.0.exe" is uploaded as
+      # "my-app-Setup-1.0.0.exe" — and the updater manifest's url is rewritten to
+      # that same name (app-builder-lib/out/platformPackager.js
+      # computeSafeArtifactNameIfNeeded + out/publish/updateInfoBuilder.js).
+      #
+      # Because this workflow uploads the artifacts itself (--publish never), that
+      # rename never happens: the asset would keep its spaces while the manifest
+      # points at the dashed name, so every in-app update downloads a 404.
+      # Reproduce the rename here; the verification below proves it worked.
+      - name: Apply electron-builder's asset renaming (space → dash)
+        run: |
+          set -euo pipefail
+          cd dist
+          for f in *; do
+            if [ -f "$f" ] && [[ "$f" == *" "* ]]; then
+              mv -- "$f" "${f// /-}"
+            fi
+          done
+      - name: Verify every updater manifest and the files it points to
+        run: |
+          set -euo pipefail
+          cd dist
+          for m in latest.yml latest-mac.yml latest-linux.yml latest-linux-arm64.yml; do
+            [ -f "$m" ] || { echo "::error::missing $m"; exit 1; }
+            grep -q "^version: $VERSION$" "$m" || { echo "::error::$m is not version $VERSION"; exit 1; }
+            while read -r u; do
+              [ -f "$u" ] || { echo "::error::$m references missing $u"; exit 1; }
+            done < <(grep -E '^\s*-?\s*url:' "$m" | awk '{print $NF}')
+          done
+      - name: Manifests must point at an updatable artifact
+        run: |
+          set -euo pipefail
+          cd dist
+          # macOS: electron-updater's MacUpdater only accepts a zip. A dmg-only
+          # build makes the manifest point at a .dmg, and the updater then throws
+          # ERR_UPDATER_ZIP_FILE_NOT_FOUND — the in-app update check fails on
+          # every Mac. ("pkg"/"dmg" in findFile() are an EXCLUSION list, not a
+          # fallback, so a dmg never satisfies the zip lookup.)
+          if ! grep -E '^\s*-?\s*url:' latest-mac.yml | grep -qi '\.zip$'; then
+            echo "::error::latest-mac.yml does not point at a zip; macOS in-app update fails"
+            exit 1
+          fi
+          # Windows: only the NSIS installer can replace itself.
+          if ! grep -E '^\s*-?\s*url:' latest.yml | grep -qi 'setup.*\.exe$'; then
+            echo "::error::latest.yml does not point at the NSIS installer"
+            exit 1
+          fi
+          # Linux: only AppImage updates itself (deb/rpm are install channels).
+          if ! grep -E '^\s*-?\s*url:' latest-linux.yml | grep -qi '\.appimage$'; then
+            echo "::error::latest-linux.yml does not point at an AppImage"
+            exit 1
+          fi
+      - name: SHA256SUMS (LF, generated on Linux)
+        # `find -print0` instead of `sha256sum -- *`: the glob would include
+        # SHA256SUMS itself on a re-run (it exists by then), producing a
+        # self-referential checksum file.
+        run: |
+          set -euo pipefail
+          cd dist
+          rm -f SHA256SUMS
+          find . -maxdepth 1 -type f ! -name 'SHA256SUMS' -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/attest@v4
+        with: { subject-checksums: dist/SHA256SUMS }
+      - name: Create or reuse the draft, upload everything
+        run: |
+          if gh release view "$TAG" -R "$REPO" --json isDraft --jq .isDraft 2>/dev/null | grep -q false; then
+            echo "::error::$TAG is already published; bump the version"; exit 1
+          fi
+          pre=(); [[ "$TAG" == *-* ]] && pre=(--prerelease)
+          gh release view "$TAG" -R "$REPO" >/dev/null 2>&1 || \
+            gh release create "$TAG" -R "$REPO" --draft --verify-tag --title "$TAG" --notes "See CHANGELOG.md for details." "${pre[@]}"
+          gh release upload "$TAG" -R "$REPO" dist/* --clobber
+      - name: Publish and make latest
+        run: |
+          id=$(gh api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name==\"$TAG\" and .draft) | .id")
+          latest=true; case "$TAG" in *-*) latest=false;; esac
+          gh api -X PATCH "repos/$REPO/releases/$id" -F draft=false -f make_latest=$latest >/dev/null
+      - name: Post-release verification (anonymous, like a real user)
+        if: ${{ !contains(env.TAG, '-') }}
+        run: |
+          [ "$(gh api "repos/$REPO/releases/latest" --jq .tag_name)" = "$TAG" ] || { echo "::error::releases/latest is not $TAG"; exit 1; }
+          # the API is the judge; the download redirect can lag a few minutes behind it
+          for m in latest.yml latest-mac.yml latest-linux.yml latest-linux-arm64.yml; do
+            ok=; for _ in $(seq 1 10); do
+              curl -fsSL "https://github.com/$REPO/releases/latest/download/$m" | grep -q "^version: $VERSION$" && { ok=1; break; }; sleep 60
+            done
+            [ -n "$ok" ] || { echo "::error::public $m still stale after 10 min"; exit 1; }
+          done
+
+  # --- winget -------------------------------------------------------------------------------
+  # **清单不在这个仓里提交。** winget 的清单归 winget-manifests：那边的 apps.json 是唯一源，
+  # 它自己巡检各发布仓的 release，发现新版本就重生成 manifest、往 winget-pkgs 开 PR。
+  # 本仓只管把 release 发出去；把新应用加进 apps.json 即可。不要在这里再开第二条提交路径——
+  # 两条路写同一个包，第二个 PR 会被当重复拒掉，看起来就像「winget 坏了」。
+  # 不在那个流水线里的发布者，才用下面注释掉的 winget-releaser 写法。
+  #   winget:                                # optional; first version must be submitted manually
+  #     needs: publish
+  #     if: ${{ !contains(inputs.tag || github.ref_name, '-') && vars.WINGET_ID != '' }}
+  #     runs-on: ubuntu-latest
+  #     steps:
+  #       - name: Token preflight
+  #         env: { WINGET_TOKEN: '${{ secrets.WINGET_TOKEN }}' }
+  #         run: '[ -n "$WINGET_TOKEN" ] || { echo "::error::WINGET_TOKEN (classic PAT: public_repo, workflow) missing"; exit 1; }'
+  #       - uses: vedantmgoyal9/winget-releaser@v2
+  #         with:
+  #           identifier: ${{ vars.WINGET_ID }}
+  #           release-tag: ${{ env.TAG }}
+  #           installers-regex: '\.exe$'
+  #           max-versions-to-keep: 5
+  #           token: ${{ secrets.WINGET_TOKEN }}
