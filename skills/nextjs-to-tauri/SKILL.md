@@ -1,6 +1,6 @@
 ---
 name: nextjs-to-tauri
-version: 1.1.7
+version: 1.1.8
 description: Use when packaging a Next.js 16 App Router app as a Tauri 2 desktop app with static export, auto-update, tray and CI. Triggers on 打包成桌面应用 / 生成 exe.
 
 metadata:
@@ -34,10 +34,15 @@ Wrap a **client-side** Next.js 16 (App Router) app in a thin Tauri 2 native shel
 
 Do these in order. Copy-paste templates live in the supporting files.
 
+**Package manager:** the commands and `desktop-build.yml` assume Yarn Classic. In an npm or pnpm repo substitute the equivalent (`npm ci` / `pnpm install --frozen-lockfile`, `npx tauri` / `pnpm tauri`) and change the workflow's `cache:` and install line — `cache: yarn` fails outright when there is no `yarn.lock`.
+
 1. **Verify latest versions first** (they drift — never trust the numbers in templates):
    - npm: `npm view @tauri-apps/cli version` (+ `plugin-opener`, `plugin-updater`)
    - crates: `curl -sA x https://crates.io/api/v1/crates/tauri | node -p "JSON.parse(require('fs').readFileSync(0)).crate.max_stable_version"` (repeat for each `tauri-plugin-*`)
    - actions: `gh api repos/actions/checkout/releases/latest --jq .tag_name` (+ `actions/setup-node`, `Swatinem/rust-cache`, `actions/upload-artifact`; `tauri-apps/tauri-action@v1` is the moving major tag — check its README, not the release list)
+   - node: current Active LTS from the [official schedule](https://raw.githubusercontent.com/nodejs/Release/main/schedule.json). Pin that major in `desktop-build.yml`; **do not use `lts/*` or `latest`** — CI would jump to a new line without a reviewed upgrade.
+   - `engines.node` is the code's real floor (take it from Next.js/Tauri CLI constraints), not a copy of the CI major; `.nvmrc` is optional.
+   - ongoing: `desktop-app-standard`'s `audit.mjs` re-reads npm/crates/Node schedule and reports drift; run it after bootstrap and before releases.
 
 2. **Gate static export on Tauri** in `next.config.*`, driven by an EXPLICIT build flag rather than Tauri's auto-injected `TAURI_ENV_PLATFORM` (gotcha #1). Merge into your existing config, keeping the `next-intl` plugin wrapper:
    ```ts
@@ -72,8 +77,8 @@ Do these in order. Copy-paste templates live in the supporting files.
    yarn tauri init --ci --app-name "<app>" --window-title "<Title>" \
      --frontend-dist "../out" --dev-url "http://localhost:3000" \
      --before-dev-command "yarn dev" --before-build-command "yarn build:tauri"
-   # The source must be SQUARE (the CLI says "squared PNG or SVG") and 1024x1024 — the
-   # generated .icns carries a 1024 layer, so a 512 source is upscaled 2x for macOS.
+   # The source must be SQUARE (the CLI says "squared PNG or SVG") and 1024x1024 — that
+   # is the master Tauri's icon generator works from, so a smaller source gets scaled up.
    yarn tauri icon public/logo.png
    rm -r src-tauri/icons/{android,ios}   # desktop-only; they are directories, hence -r
    ```
@@ -124,7 +129,7 @@ The code migration is done by the agent; these steps need the human and break th
 | # | Gotcha | Fix |
 |---|--------|-----|
 | 1 | **White screen / flat files.** Static export puts `/en` at `en.html` + an `en/` dir of RSC data; Tauri's asset server serves a directory's `index.html` but does **not** append `.html` to extensionless paths. | `trailingSlash: true` (Tauri builds only) → emits `en/index.html`, resolved by directory-index. **Gate it with an explicit `TAURI_BUILD` flag (`yarn build:tauri`) rather than the auto-injected `TAURI_ENV_PLATFORM`.** That variable is real and the CLI does set it for `beforeBuildCommand`, so this is not a bug workaround — it is that the flag names the intent and lives in the script you run, which keeps the difference between the web build and the Tauri build visible in `package.json` instead of hiding in an env var the reader has to know about. Set window `url: "/en/"` as a safe entry; don't rely on the root `/`→`/en` redirect (emitted without a trailing slash, 404s in Tauri). |
-| 2 | **`output: "export"` + middleware is forbidden in Next 16 — even in dev.** `next-intl` ships middleware (`proxy.ts`/`middleware.ts`). Setting `output` in dev silently kills locale redirects. | Make `output` build-only (`isDev ? {} : {...}`). |
+| 2 | **`output: "export"` and middleware do not fit together in Next 16.** Next's static-export docs put **Proxy** (Next 16's name for middleware) and Internationalized Routing under *unsupported features*, so next-intl's locale-detection proxy cannot run in an exported build. next-intl's own static-export page still pairs `withNextIntl({ output: "export" })` with a `proxy.ts`, which is why the trap is easy to fall into. | Make `output` build-only (`isDev ? {} : {...}`) so dev keeps redirecting and only the export drops the proxy. |
 | 3 | **`src-tauri/` vanishes from `git status`.** Some repo `.gitignore`s have a bare `src-tauri` line. | Replace with `src-tauri/target` + `src-tauri/gen/schemas`. Verify: `git check-ignore src-tauri/tauri.conf.json` returns nothing. |
 | 4 | **`isTauri()` false positives** if you detect by dynamic-importing `@tauri-apps/api`. It imports fine in a plain browser; `invoke` only throws at call time. | Detect via runtime globals: `window.__TAURI_INTERNALS__` / `__TAURI__` / UA contains `Tauri`. Same bundle ships to web + desktop. |
 | 5 | **Single-instance plugin must be registered FIRST**, before all other plugins, or second-launch refocus won't route. Desktop-only (target-gate it off mobile). | See `lib.rs` ordering in `tauri-files.md`. |

@@ -1,6 +1,6 @@
 # `src-tauri/` templates
 
-Copy-paste, then replace `<placeholders>`. Pin versions to whatever the "verify latest" step in SKILL.md reports — the numbers here were current 2026-09 and **will** drift.
+Copy-paste, then replace `<placeholders>`. The `2` / `^2` ranges below are deliberate: the lockfile pins the exact version. Verify the current stable major with the "verify latest" step in SKILL.md — numbers written here **will** drift.
 
 ---
 

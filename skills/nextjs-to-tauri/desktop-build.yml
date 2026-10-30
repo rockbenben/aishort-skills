@@ -1,22 +1,25 @@
 # Template: .github/workflows/desktop-build.yml
 # Cross-platform Tauri build with signing, a draft release carrying latest.json,
-# and a portable Windows exe. Replace <App Title>/<AppName>. Pin action versions to
-# whatever the SKILL.md "verify latest" step reports (these were current 2026-09).
+# and a portable Windows exe. Replace <App Title>/<AppName>. Pin action versions and
+# the Node major to whatever the SKILL.md "verify latest" step reports; never use
+# `lts/*`/`latest` for CI Node (it jumps lines without a reviewed upgrade).
 #
 # Secrets required for auto-update: TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD if the key
 # has one). GITHUB_TOKEN is built in. Remember: the release is a DRAFT — un-draft it
 # to actually roll the update out (releases/latest ignores drafts).
 #
 # tauri-action v1 traps worth knowing before your first re-run:
-#  * A draft run will not adopt a published release. With releaseDraft: true the action
-#    scans the release list for a DRAFT carrying this tag; on finding a published one it
-#    warns and falls through to CREATING a release for the same tag, which GitHub then
-#    rejects. So re-running a tag you have un-drafted needs the release deleted first,
-#    and the manual path must not pass a tagName at all — see below.
-#  * It rewrites an existing release's name and body only when that release is already
-#    PUBLISHED (updating a draft would move its tag and duplicate it). In the normal draft
-#    flow the first matrix job creates the draft and the other three only upload into it,
-#    so generated notes are written once, not once per job.
+#  * Observed on tauri-action v1, not documented in its README (which only says the
+#    action "will try to find an existing release for that tag"): a draft run will not
+#    adopt a published release. With releaseDraft: true the action scans the release list
+#    for a DRAFT carrying this tag; on finding a published one it warns and falls through
+#    to CREATING a release for the same tag, which GitHub then rejects. So re-running a
+#    tag you have un-drafted needs the release deleted first, and the manual path must
+#    not pass a tagName at all — see below.
+#  * Same status: it rewrites an existing release's name and body only when that release
+#    is already PUBLISHED (updating a draft would move its tag and duplicate it). In the
+#    normal draft flow the first matrix job creates the draft and the other three only
+#    upload into it, so generated notes are written once, not once per job.
 #  * Two inputs look tempting and mostly are not: uploadPlainBinary is documented for
 #    `--no-bundle` builds only, so it does not replace the portable-exe steps below when
 #    you also ship installers; updaterJsonPreferNsis switches latest.json's
@@ -53,12 +56,14 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libgtk-3-dev wget file
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf libgtk-3-dev
 
+      # Pin the major for reproducibility; desktop-app-standard's audit checks it
+      # against the nodejs/Release schedule.
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
-          node-version: lts/*
+          node-version: 26
           cache: yarn
 
       - name: Install Rust toolchain
