@@ -111,18 +111,19 @@ App 工程的 csproj 最少要有这些（其余留空，别把发布属性写�
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
-    <!-- 产物叫 Xxx.exe 而不是 Xxx.App.exe：默认取工程名，不设这行发版脚本里的文件名全对不上 -->
     <AssemblyName>Xxx</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <!-- 从 git tag 取版本，见 pitfalls.md「版本号发出去还是上一版」；
-         这个兜底值是那个 target 的 Condition 判据，必须定义，否则 target 永不触发 -->
     <VersionFallback>0.0.1</VersionFallback>
     <Version>$(VersionFallback)</Version>
-    <!-- 这里故意没有 RuntimeIdentifier(s)、SelfContained、PublishSingleFile（全在 pubxml），
-         也没有 RestorePackagesWithLockFile（见下文「NuGet 锁文件：单文件发布先别开」） -->
   </PropertyGroup>
 </Project>
 ```
+
+上面几行容易忘的原因，写在这里而不是 csproj 注释里——代码块里的注释对读文档的人是隐形的，ClawHub 的安全扫描也正是把这类注释判成「隐藏指令」：
+
+- `AssemblyName` 决定产物叫 `Xxx.exe` 而不是 `Xxx.App.exe`：默认取工程名，不设这行发版脚本里的文件名全对不上。
+- `VersionFallback` 是那个 target 的 Condition 判据，必须定义，否则 target 永不触发；真正的版本从 git tag 取，见 pitfalls.md「版本号发出去还是上一版」。
+- 这里故意没有 `RuntimeIdentifier(s)`、`SelfContained`、`PublishSingleFile`（全在 pubxml），也没有 `RestorePackagesWithLockFile`（见下文「NuGet 锁文件：单文件发布先别开」）。
 
 Core 的目标框架能不带 `-windows` 就不带，判断标准是里面有没有出现 `System.Windows` 开头的类型。纯 `net10.0` 的 Core，几百个测试能在一秒出头跑完。热键这类场景用 `uint` 虚拟键码表示就不用碰 `System.Windows.Input.Key`，Core 就能保持纯净——Win32 P/Invoke 本身不需要 `-windows`。
 
@@ -233,11 +234,12 @@ dotnet-install.ps1 -Version 10.0.100 -InstallDir <临时目录> -NoPath
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <DebugType>none</DebugType>
-    <!-- 四份必须各给一个目录，否则连着发布会互相覆盖；CI 打包脚本按这四个路径取文件 -->
     <PublishDir>bin\Release\publish-x64\</PublishDir>
   </PropertyGroup>
 </Project>
 ```
+
+四份必须各给一个目录，否则连着发布会互相覆盖；CI 打包脚本按这四个路径取文件。
 
 `win-x64-needs-dotnet10.pubxml`（框架依赖，体积小得多）：只把 `SelfContained` 改成 `false`、`PublishDir` 改成 `bin\Release\publish-x64-needs-dotnet10\`，并**删掉** `EnableCompressionInSingleFile` 和 `IncludeNativeLibrariesForSelfExtract` 这两行——前者传给框架依赖会以 `NETSDK1176` 直接失败，后者在这个 bundle 里没有原生库可打包、不报错所以能一直躺着误导人。
 

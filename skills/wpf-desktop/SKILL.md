@@ -1,6 +1,6 @@
 ---
 name: wpf-desktop
-version: 1.1.0
+version: 1.1.1
 description: Use when building, debugging or releasing a WPF app on .NET — tray, single-file exe, DPI, startup, release CI. WPF 桌面应用：托盘、单文件 exe、DPI、启动、发版 CI。
 
 metadata:
