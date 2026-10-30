@@ -12,6 +12,12 @@ on:
     paths:
       - "skills/**"
 
+# Serialize runs: two overlapping pushes must not publish the same skill from two
+# different SHAs, where the older run can land last and move the registry backwards.
+concurrency:
+  group: publish-clawhub
+  cancel-in-progress: false
+
 jobs:
   # Decide which skills to publish: on push, only the ones whose files changed;
   # on manual dispatch, the chosen skill (or all). Avoids re-publishing an
@@ -27,7 +33,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "26"
 
       - name: Determine which skills to publish
         id: list
@@ -45,6 +51,14 @@ jobs:
           base=""
           if [ "$EVENT" = "workflow_dispatch" ]; then
             if [ -n "$INPUT_SKILL" ]; then
+              # One skill directory name and nothing else: this value reaches the
+              # publish job, and the publish job holds the registry token.
+              if ! printf '%s' "$INPUT_SKILL" | grep -qE '^[A-Za-z0-9._-]+$'; then
+                echo "::error::skill must be a single directory name (letters, digits, dot, dash, underscore)"; exit 1
+              fi
+              if [ "$INPUT_SKILL" = "." ] || [ "$INPUT_SKILL" = ".." ] || [ ! -f "skills/$INPUT_SKILL/SKILL.md" ]; then
+                echo "::error::skill must name an existing skill directory under skills/"; exit 1
+              fi
               dirs="$INPUT_SKILL"
             else
               dirs="$(all_skills)"
@@ -92,6 +106,33 @@ jobs:
         run: |
           node scripts/test-md-web-viewer.mjs
           node scripts/test-md-web-lifecycle.mjs
+          node scripts/test-md-web-publish.mjs
+
+      # html-shot ships a browser-driven suite: unit tests for the shared helpers and
+      # local-only end-to-end tests (HTTP, transparency, containers, failure paths,
+      # icons). They run against a real Chromium, so this step is what stops a
+      # regression from reaching ClawHub. The runner already has Chrome — use it
+      # instead of downloading Playwright's browser on every push.
+      - name: Test html-shot
+        run: |
+          cd skills/html-shot
+          npm ci
+          CHROME="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          if [ -n "$CHROME" ]; then
+            echo "using system browser: $CHROME"
+            export HTML_SHOT_EXECUTABLE="$CHROME"
+          else
+            node node_modules/playwright/cli.js install chromium
+          fi
+          npm run test:all
+
+      # desktop-app-standard ships its own dependency-free Node test suite over its
+      # scripts (version comparison, lockfile parsing, template self-checks, a mocked
+      # online run, .NET TFM/SDK fixtures). They need no dependencies and no network,
+      # so they are the cheapest guard in this workflow — and without this step
+      # nothing would run them.
+      - name: Test desktop-app-standard
+        run: node --test skills/desktop-app-standard/tests/*.test.mjs
 
   publish:
     needs: detect
@@ -106,7 +147,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "26"
 
       - name: Install ClawHub CLI
         run: npm install -g clawhub
@@ -120,11 +161,18 @@ jobs:
 
       - name: Extract version from SKILL.md
         id: version
+        env:
+          # Through the environment, never interpolated into the script: an
+          # expression is substituted before the shell parses it, and the publish
+          # job holds the registry token on disk.
+          SKILL: ${{ matrix.skill }}
         run: |
-          VERSION=$(grep '^version:' "skills/${{ matrix.skill }}/SKILL.md" | head -1 | sed 's/version:[[:space:]]*//')
+          VERSION=$(grep '^version:' "skills/$SKILL/SKILL.md" | head -1 | sed 's/version:[[:space:]]*//')
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Publish skill
-        run: clawhub publish "skills/${{ matrix.skill }}" --version "${{ steps.version.outputs.value }}"
         env:
+          SKILL: ${{ matrix.skill }}
+          VERSION: ${{ steps.version.outputs.value }}
           CLAWHUB_CONFIG_PATH: /tmp/clawhub/config.json
+        run: clawhub publish "skills/$SKILL" --version "$VERSION"

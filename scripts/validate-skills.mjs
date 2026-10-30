@@ -4,18 +4,22 @@
  * before the publish workflow uploads anything.
  *
  * Rules come from the ClawHub skill-format docs and from the clawhub CLI's own source
- * (MAX_PUBLISH_FILE_BYTES, MAX_PUBLISH_TOTAL_BYTES, "SKILL.md required", semver on
- * --version), plus OpenClaw's runtime gating, which compares metadata.openclaw.os against
- * process.platform.
+ * ("SKILL.md required", semver on --version), plus the server-side publish caps
+ * (MAX_PUBLISH_FILE_BYTES, MAX_PUBLISH_TOTAL_BYTES) and OpenClaw's runtime gating, which
+ * compares metadata.openclaw.os against process.platform. The CLI's marker check accepts
+ * skill.md and skills.md as well as SKILL.md; this repo ships SKILL.md, and the validator is
+ * the stricter of the two on purpose.
  *
  * It also models which files the publish bundle actually carries. The CLI's listTextFiles()
- * (dist/skills.js, read at 0.8.0; publish.js calls it) walks with its own readdir loop, which
- * skips every entry whose name starts with "." — file or directory — plus node_modules/, and then
- * drops anything whose extension is outside the text allowlist (dist/schema/textFiles.js). A real
- * file on disk can therefore be invisible to an install. Nothing here enforces
- * metadata.openclaw.files: that field is not in ClawHub's documented field list, the CLI never
- * reads it, and publish uploads every file in the folder regardless, so declaring a file neither
- * lets it in nor keeps it out.
+ * (dist/skills.js, read at 0.8.0; publish.js:39 calls it) walks with its own readdir loop,
+ * which skips every entry whose name starts with "." — file or directory — plus node_modules/,
+ * and then drops anything whose extension is outside the text allowlist
+ * (dist/schema/textFiles.js). A real file on disk can therefore be invisible to an install.
+ * ClawHub itself does not enforce metadata.openclaw.files: that field is not in its metadata schema
+ * (dist/schema/schemas.js), the CLI never parses the frontmatter at all, and publish uploads
+ * every text file the bundler collected regardless of it, so declaring a file neither lets it
+ * in nor keeps it out. This validator still checks each declaration against disk and the
+ * modeled bundle, because a stale entry there is a documentation bug worth failing on.
  *
  * One thing this model leaves out on purpose: listTextFiles() also seeds the skill folder's own
  * .gitignore, .clawhubignore and .clawdhubignore into its matcher, and matching those faithfully
@@ -57,8 +61,16 @@ const TEXT_EXTENSIONS = new Set([
   "jsx", "py", "sh", "rb", "go", "rs", "swift", "kt", "java", "cs", "cpp", "c", "h", "hpp",
   "sql", "csv", "ini", "cfg", "env", "xml", "html", "css", "scss", "sass", "svg",
 ]);
-// OpenClaw's authoring guide: one line, under 160 characters.
-const DESC_LIMIT = 160;
+// The description is the skill's trigger contract, so it is allowed to be wordy: it
+// carries the trigger phrases the agent matches on. OpenClaw's authoring guide aims for
+// "one line, under 160 characters", but the workshop linter treats over-160 as advisory,
+// not blocking. The two numbers that actually bite:
+//   - the field accepts 1-1024 bytes;
+//   - list and search results cap it at 512 UTF-16 code units, past which it is truncated.
+// So the warning starts where the text really starts losing something.
+const DESC_LIMIT = 512;
+const DESC_BYTES_LIMIT = 1024;
+const DESC_SOFT_LIMIT = 160;
 // evaluateRuntimeEligibility() compares this list against resolveRuntimePlatform(), which
 // returns process.platform. "macos" (the value the format reference's example uses) never matches.
 const OS_VALUES = ["darwin", "linux", "win32"];
@@ -96,7 +108,7 @@ const declaredFileExists = (dir, pattern) =>
 
 const versionAt = (ref, relPath) => {
   try {
-    const src = execFileSync("git", ["show", `${ref}:${relPath}`], { encoding: "utf8" });
+    const src = execFileSync("git", ["show", `${ref}:${relPath}`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
     return src.match(/^version:\s*(.+)$/m)?.[1].trim() ?? null;
   } catch { return null; } // absent at that ref = a new skill, nothing to compare
 };
@@ -132,8 +144,10 @@ for (const dirent of readdirSync(SKILLS, { withFileTypes: true })) {
   }
 
   if (typeof meta.description !== "string" || !meta.description.trim()) fail(skill, "description is required");
+  else if (Buffer.byteLength(meta.description, "utf8") > DESC_BYTES_LIMIT)
+    fail(skill, `description is ${Buffer.byteLength(meta.description, "utf8")} bytes; the field accepts at most ${DESC_BYTES_LIMIT}`);
   else if (meta.description.length >= DESC_LIMIT)
-    warn(skill, `description is ${meta.description.length} chars; OpenClaw asks for one line under ${DESC_LIMIT}`);
+    warn(skill, `description is ${meta.description.length} chars; list and search results truncate it at ${DESC_LIMIT} (the authoring guide aims for one line under ${DESC_SOFT_LIMIT}, but that is advisory)`);
 
   // The publish workflow reads this line and passes it to `clawhub publish --version`.
   if (typeof meta.version !== "string" || !SEMVER.test(meta.version))
@@ -207,7 +221,10 @@ for (const dirent of readdirSync(SKILLS, { withFileTypes: true })) {
   const body = raw.replace(/^---\n[\s\S]*?\n---\n/, "");
   for (const local of readdirSync(dir)) {
     if (local === "SKILL.md" || !statSync(join(dir, local)).isFile()) continue;
-    const pattern = local.replace(/[.]/g, "\\$&");
+    // Every regex metacharacter has to be escaped: a file named "a(b.md" used to
+    // make new RegExp() throw, and a throwing validator takes the CI publish
+    // gate down with it.
+    const pattern = local.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     if (!new RegExp(`(?<![-\\w.])${pattern}(?![-\\w])`).test(body)) continue;
     if (!ships.has(local)) fail(skill, `SKILL.md names ${local}, which clawhub never uploads`);
   }
@@ -229,8 +246,12 @@ for (const dirent of readdirSync(SKILLS, { withFileTypes: true })) {
     const rel = `skills/${skill}`;
     let changed = false;
     try {
-      changed = execFileSync("git", ["diff", "--name-only", since, "--", rel], { encoding: "utf8" }).trim().length > 0;
-    } catch { changed = false; }
+      changed = execFileSync("git", ["diff", "--name-only", since, "--", rel], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().length > 0;
+    } catch (e) {
+      // A ref that does not exist used to disable this gate silently — and the
+      // gate is the thing that stops a rejected release.
+      fail(skill, `could not compare against "${since}": ${String(e.stderr || e.message || "").split("\n")[0]}`);
+    }
     if (changed) {
       const before = versionAt(since, `${rel}/SKILL.md`);
       if (before && before === meta.version)
