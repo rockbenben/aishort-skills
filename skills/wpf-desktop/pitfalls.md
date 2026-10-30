@@ -197,6 +197,13 @@ if (gaveUp && stable == 0) RaiseAboveBlocker(w, live, blocker);
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity type="win32" name="Xxx.App" version="1.0.0.0" processorArchitecture="*"/>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 / 11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>
       <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
@@ -206,7 +213,9 @@ if (gaveUp && stable == 0) RaiseAboveBlocker(w, live, blocker);
 </assembly>
 ```
 
-写成 `permonitorv2,permonitor` 这个降级链是有意的：PerMonitorV2 要 Win10 1703 才有，逗号后面那档给更老的系统兜底。
+清单的 schema 有硬要求：`<assembly>` 的**第一个子元素必须是 `noInherit` 或 `assemblyIdentity`**（官方 Application manifests 一节：「Its first subelement must be a noInherit or assemblyIdentity element」），少了它整个清单就作废。另外**没有 `<compatibility>` 段的清单在 Windows 7 上按 Vista 兼容模式运行**——同一个文档写的。所以上面给的是完整文件：`assemblyIdentity` 放第一，`compatibility` 声明支持的 OS（Windows 10/11 的 GUID `{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}`），再往下才是 `windowsSettings`。
+
+写成 `permonitorv2,permonitor` 这个降级链是有意的：PerMonitorV2 要 Win10 1703 才有，逗号后面那档给 1607–1702 兜底。再老的系统（<1607）根本不认 `dpiAwareness` 这个元素，落到 `dpiAware` 那行——`true/pm` 在 8.1 上是按显示器，在 Vista/7/8 上仍是系统级。
 
 没有这两行，进程只是系统级 DPI 感知，全局只有一个像素到 DIP 的换算系数，副屏只要缩放比例和主屏不同，窗口定位就是错的。声明之后要跟着改的是心智：不存在「整个桌面的缩放比例」这回事了，每次做几何换算都得用 `GetDpiForMonitor` 问那块屏自己的 DPI。
 
@@ -266,6 +275,22 @@ XAML 里那个 `MaxHeight` 仍然留着，而且要**留保守值**，别改成�
 不是窗口的兜底，拿整份文件去 grep 会把它们误当成已经封顶）。测试的形状见
 `dev-switches.md`「它查不出什么」那两节。
 
+### 窗口封顶了，正文和按钮仍可能在屏外
+
+`FitToWorkArea` 只封窗口，不保证 `SizeToContent="Height"` + `AllowsTransparency="True"` 的窗口真的按这个上限排版。实测一个长提醒弹窗：窗口已有 `MaxHeight` / 运行时工作区探测，正文在 `*` 行的 `ScrollViewer` 里，仍然高过工作区，`是/否/稍后` 整行落到屏幕下方。更麻烦的是 `PrintWindow` / 离屏 `RenderTargetBitmap` 会把**整扇窗**（包括屏外部分）画进 PNG，截图看起来完全正常——又是「截图绿、真机点不到」。
+
+修法是给**正文内容**再封一次，取窗口所在那块屏的工作区（不是主屏），并留出标题/按钮/边距：
+
+```csharp
+w.SourceInitialized += (_, _) => {
+    var workHeight = WorkAreaHeightInDips(w);   // 与上面的 FitToWorkArea 共用同一份；失败返回 0
+    if (workHeight > 0)
+        msgScroll.MaxHeight = Math.Clamp(workHeight * 0.35, 120, 320); // 比例/上下限按字体和按钮行实测
+};
+```
+
+窗口的 `MaxHeight` 仍然保留，但它是第二道；透明窗上它可能约束不住 `SizeToContent` 的实际排版。验收不要只看整窗图：拍一次**整屏**，或断言主按钮的屏幕 rect 在 `GetMonitorInfo(...).rcWork` 内；至少用一条超长文本、最紧的工作区档和副屏各跑一次。
+
 ## 深色应用配了个白色标题栏
 
 看着像窗口只重绘了一半。`DWMWA_USE_IMMERSIVE_DARK_MODE` 的值是 20（[官方枚举](https://learn.microsoft.com/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute)，标注 Win11 build 22000 起支持），要在 `SourceInitialized` 里调用，那时候 HWND 才存在：
@@ -288,7 +313,7 @@ AppDomain.CurrentDomain.UnhandledException  // 其他线程
 TaskScheduler.UnobservedTaskException       // 没有 await 的 Task
 ```
 
-只有第一个能救，设 `e.Handled = true` 之后弹个提示框应用能继续跑；后两个进来时进程已经在往下走，能做的只有把堆栈写进日志。日志不用引框架，往配置文件所在目录追加一行时间戳加异常就行——绿色版跟着 exe 走，装到系统里就在 `%APPDATA%\Xxx\`。
+只有第一个能救，设 `e.Handled = true` 之后弹个提示框应用能继续跑。`AppDomain` 那个进来时进程已经在终止；`TaskScheduler` 那个默认不杀进程（.NET 4.5 起未观察的任务异常不再升级，.NET Core / 5+ 沿用这个默认），但异常已经发生、还要等 GC 回收任务时才浮出来——两个都只能把堆栈写进日志。日志不用引框架，往配置文件所在目录追加一行时间戳加异常就行——绿色版跟着 exe 走，装到系统里就在 `%APPDATA%\Xxx\`。
 
 三个入口都挂了、日志还是空的，就要考虑第四种消失：**它不是异常，是某处代码正常地调了 `Shutdown()`**——异常处理器一个都不会响。临时给关闭事件挂个栈探针，让肇事者自报家门：
 
@@ -377,9 +402,12 @@ foreach (dynamic item in shell.NameSpace("shell:AppsFolder").Items())
 
 **这条规则可以机械化，别只当成 review 要点。** 判据是纯结构的，扫 XAML 就能查：
 
-> `TextWrapping="Wrap"` 的 `TextBlock`，若父容器是水平 `StackPanel` 或 `WrapPanel`
-> （两者给子元素的可用宽度都是无限），而它自己**既没有 `Width` 也没有 `MaxWidth`**
+> `TextWrapping="Wrap"` 的 `TextBlock`，若父容器是水平 `StackPanel`
+> （给子元素的可用宽度是无限），而它自己**既没有 `Width` 也没有 `MaxWidth`**
 > —— 那么换行永远不会发生，写的那个 `Wrap` 是一句空话。
+>
+> `WrapPanel` 不在这条规则里：它给子元素的是可用宽度，放不下才换行（见上表）。只有
+> `WrapPanel` 自己被放进无限宽的测量里时才会把无限传下去，那种情况要沿祖先链看。
 
 第三个条件是关键，第一版规则没有它，在一个真实应用上命中 **64 处、全是误报**：
 那些是表单字段标签，写着 `Width="90"`，宽度由自己钉死，换行本来就正常。补上
@@ -480,3 +508,17 @@ README 和 release notes 里写「自包含版约 68 MB、精简版约 1.5 MB」
 ## XAML 写错了却一路带到发版
 
 WPF 的 XAML 是懒加载的，某个窗口的 XAML 写错，只要不打开那个窗口就不会报错。给每个应用加一个 `--smoke` 开关：构造并布局每一个窗口，然后退出，放进 CI 跑。配套的 `--shots` 把每个窗口按主题 × 语言 × 工作区高度离屏渲染成 PNG 逐张比对。两个开关的实现、CI 判定和放置位置（单实例互斥锁之前），见 `dev-switches.md`。
+
+## 整个桌面点不动，只有杀掉桌面窗口管理器才恢复
+
+症状：右键画着手势，或者跑完某个自检之后，**整个桌面点不动**——鼠标还在动，按下去哪儿都没反应。唯一的解法是杀掉 `dwm.exe`（桌面窗口管理器），杀掉立刻恢复。
+
+机制：某块**铺满整块屏、置顶**的窗口（常见的是手势轨迹那层透明覆盖窗）所属的 UI 线程卡过了 5 秒（`HungWindowTimeout`），DWM 就在它上面盖一块自己的「未响应」外壳。那块外壳**不继承**原窗口的 `WS_EX_TRANSPARENT`，于是**点得中**——它盖住整屏，整屏的点击就被它吃掉了。它属于 `dwm.exe`，应用自己摘不掉也关不掉，所以只有杀掉 dwm.exe 能解开。
+
+所以这条的判据不是「哪里卡了」，而是「**有没有一块铺满整屏的置顶窗口，而那个进程没关幽灵化**」。修法是进程级的单向开关 `DisableProcessWindowsGhosting()`：翻了它，这个进程的任何窗口都不会再被盖上外壳，代价是 UI 线程真卡住时窗口只是卡着不动，没有那块壳可以拖走、可以关。
+
+**这一条要在所有会摆全屏窗的路上都翻，不只是生产那条。** 实测踩到的正是开发期自检那条：应用本体在建覆盖窗之前翻了开关，而自检走的是另一条路（`OnStartup` 见到 `--smoke` 之类就直接 `return`，`StartEngines` 根本没跑），那句开关一次都没执行——而自检恰恰是唯一一条会把全屏覆盖窗真的摆到**活桌面**上的路（枚举窗口实测：以 (0,0)-(2560,1440) 上屏）。
+
+判据可以机械化：扫全仓库每一个「造出这扇全屏窗」的位置，要求同一文件里、在它之前出现那句开关。只钉生产那一个文件是不够的——没被守住的那条恰好是最坏的那条。开发期自检那一侧的完整修法见 `dev-switches.md`「harness 会自己引爆的四颗雷」。
+
+同一场事故还有另一半，别和这条搅在一起：**跑测试时鼠标不归自己管**。那是同一个根（全局低级钩子 + 闸门 + 拆卸时真的注入按键），判据与修法见 `dev-switches.md`「跑测试会真的接管你这台机器的鼠标」。
