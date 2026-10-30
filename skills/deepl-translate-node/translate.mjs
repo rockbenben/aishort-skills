@@ -96,8 +96,8 @@ async function main() {
   }
 
   if (!resp.ok) {
-    if (resp.status === 403) return fail("403 Forbidden — bad or missing DEEPL_API_KEY.");
-    if (resp.status === 456) return fail("456 — DeepL Free quota exhausted for this billing period.");
+    if (resp.status === 403) return fail("403 Forbidden — bad or missing DEEPL_API_KEY, or the key lacks the permission scope for this endpoint.");
+    if (resp.status === 456) return fail("456 — DeepL usage limit reached (character quota for the billing period, a Cost Control or key-level limit, or the number of glossaries the plan allows). Read the details from the DeepL console.");
     // The reason lives in the body, not the status: a bad language code answers 400 with
     // {"message":"Bad request. Reason: Value for 'target_lang' not supported."} Truncating
     // keeps a stray HTML error page from burying the ERROR: line.

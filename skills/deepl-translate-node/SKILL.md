@@ -1,6 +1,6 @@
 ---
 name: deepl-translate-node
-version: 1.1.7
+version: 1.1.8
 description: Use when translating text and the result has to be right — proper nouns, legal/medical/technical terms, idioms, distant language pairs. 用 DeepL 翻译 / 翻译这段.
 
 metadata:
@@ -111,19 +111,27 @@ For the authoritative, always-current list, query the **v3** languages endpoint
 (`/v2/languages` is superseded). The `resource` query parameter is **required** —
 omitting it returns 400:
 `GET https://api-free.deepl.com/v3/languages?resource=translate_text` with the
-`Authorization: DeepL-Auth-Key <key>` header (other `resource` values:
-`translate_document`, `translation_memory`, `voice`, `write`, `glossary`, `style_rules`). Each
+`Authorization: DeepL-Auth-Key <key>` header (the other `resource` values:
+`translate_document`, `voice`, `write`, `glossary`, `style_rules`, plus `translation_memory` —
+the API reference lists that seventh value, the getting-started guide's table does not). Each
 entry carries `usable_as_source` and `usable_as_target` separately, so one call tells you both
 directions. Or see
-https://developers.deepl.com/docs/getting-started/supported-languages
+https://developers.deepl.com/docs/resources/supported-languages
 
 **Do not treat any listing as the gate.** `/v2/languages?type=target` does not list `EN`, `PT`
 or `YUE` as targets, yet `/v2/translate` accepts all three and translates into them; v3 lists
 more languages than v2 and reports `en`/`pt` as usable targets, agreeing with the behaviour. So
 a code missing from a listing is not evidence of no support — if it matters, make the call and
 read the error. A code DeepL really rejects comes back as
-`HTTP 400 — Bad request. Reason: Value for 'target_lang' not supported.` It names the field
-rather than echoing the code, so it tells you the language was the problem and clears the text.
+`ERROR: DeepL request failed: HTTP 400 — {"message":"Bad request. Reason: Value for 'target_lang' not supported."}`
+(the script prints DeepL's error body verbatim, trimmed to 300 characters). The message names
+the field rather than echoing the code, so it tells you the language was the problem and
+clears the text.
+
+Two traps in the official docs, both hit while checking this text against the live API: the
+example response in the v3 API reference shows `en` as `usable_as_target: false`, while the
+live endpoint returns `true` — the example is illustrative, the flags are not; and the error
+guide says not to match on message strings, so branch on the HTTP status, not on the wording.
 
 **Endpoint note:** `/v3/languages` returns **BCP 47** codes (`en-US`, `pt-BR`,
 `zh-Hant`) while this skill writes them uppercase, but you can feed either straight into a
@@ -153,9 +161,11 @@ API; ask the user if they need it and we can extend the script.
 
 ## Notes
 
-- The script does not track quota; a `456` response means it is exhausted. What that quota
-  is depends on the account's plan, so read it from the DeepL console rather than from here.
-- `403` means a bad/missing key.
+- The script does not track quota; a `456` response means a usage limit was hit — the
+  character quota for the billing period, a Cost Control or key-level limit, or the number of
+  glossaries the plan allows. Which one it is depends on the account, so read it from the
+  DeepL console rather than from here.
+- `403` means a bad/missing key, or a key without the permission scope for this endpoint.
 - A timeout means the host accepted the connection but never replied — a
   network/reachability problem, not a bad key or bad input. Retrying immediately
   usually reproduces it.
