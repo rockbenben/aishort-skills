@@ -67,7 +67,7 @@
 
   window.$docsify = {
     name: "<p>MD Web</p>",
-    nameLink: "/index.html#/",
+    nameLink: "#/", // relative: also works when public_url has a path prefix
     repo: "https://github.com/rockbenben/aishort-skills/tree/main/skills/md-web",
     notFoundPage: "README.md",
     auto2top: true,

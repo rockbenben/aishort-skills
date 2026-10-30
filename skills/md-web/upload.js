@@ -21,6 +21,9 @@ var SCRIPT_DIR = __dirname;
 // the file alone.
 var args = process.argv.slice(2);
 var SCRIPT_NAME = path.basename(process.argv[1]);
+// Quoted absolute path for hints the agent will copy verbatim: the skill is rarely the cwd,
+// and skill directories often live under paths with spaces.
+var SCRIPT_CMD = 'node "' + path.resolve(process.argv[1]) + '"';
 var SETUP_FLAG = "--setup";
 var usage = [
   "Usage:",
@@ -28,6 +31,10 @@ var usage = [
   "  node " + SCRIPT_NAME + " " + SETUP_FLAG + "                 provision the viewer (first run, and after an upgrade)",
 ].join("\n");
 
+if (args[0] === "--help" || args[0] === "-h") {
+  console.log(usage);
+  process.exit(0);
+}
 var isSetup = args[0] === SETUP_FLAG;
 if (isSetup && args.length > 1) {
   console.log(usage);
@@ -35,8 +42,9 @@ if (isSetup && args.length > 1) {
   process.exit(1);
 }
 if (!isSetup) {
-  if (args.length < 2) {
+  if (args.length !== 2) {
     console.log(usage);
+    console.error("UPLOAD_FAILED: expected exactly two arguments (<local-file> <remote-key>), got " + args.length + (args.length ? ": " + args.join(" ") : "."));
     process.exit(1);
   }
   if (args[0].charAt(0) === "-") {
@@ -53,6 +61,10 @@ if (!isSetup) {
     console.error("UPLOAD_FAILED: not a readable file: " + localPath);
     process.exit(1);
   }
+  if (localStat.size === 0) {
+    console.error("UPLOAD_FAILED: file is empty: " + localPath);
+    process.exit(1);
+  }
 }
 
 // ── User data dir: upgrade-safe location in home dir ──
@@ -67,8 +79,11 @@ if (fs.existsSync(USER_CONFIG_PATH)) {
 } else if (fs.existsSync(LOCAL_CONFIG_PATH)) {
   // Migrate: copy old files to new location so future upgrades are safe
   try {
-    fs.mkdirSync(USER_CONFIG_DIR, { recursive: true });
+    fs.mkdirSync(USER_CONFIG_DIR, { recursive: true, mode: 0o700 });
     fs.copyFileSync(LOCAL_CONFIG_PATH, USER_CONFIG_PATH);
+    // The copy carries the source's mode bits, so tighten it right away: the
+    // secret must never sit world-readable, not even for a moment.
+    try { fs.chmodSync(USER_CONFIG_PATH, 0o600); } catch (_) {}
     if (fs.existsSync(LOCAL_DEPLOYED_FLAG)) {
       fs.copyFileSync(LOCAL_DEPLOYED_FLAG, path.join(USER_CONFIG_DIR, ".deployed"));
     }
@@ -114,7 +129,33 @@ if (missing.length) {
   console.error("Edit: " + CONFIG_PATH);
   process.exit(1);
 }
-CONFIG.public_url = CONFIG.public_url.replace(/\/+$/, "");
+// The two most common hand-typed mistakes: pasting the endpoint with its scheme (R2's
+// dashboard shows it as https://...), and a public_url without one. The endpoint's scheme
+// is stripped below, so a pasted one no longer reaches the Host header; what is left to
+// reject is a real path in it ("host/bucket"), which would break the Host header and the
+// signature with an opaque DNS error. A public_url without a scheme yields a link that
+// is not a link.
+CONFIG.endpoint = String(CONFIG.endpoint).trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+CONFIG.public_url = String(CONFIG.public_url).trim().replace(/\/+$/, "");
+if (CONFIG.endpoint.indexOf("/") !== -1) {
+  console.error("CONFIG_INVALID: endpoint must be a bare hostname (e.g. ACCOUNT_ID.r2.cloudflarestorage.com), got: " + CONFIG.endpoint);
+  process.exit(1);
+}
+// A port is allowed and must be split off: https.request takes the host and the
+// port separately, and handing it "host:port" as the hostname makes Node resolve
+// the literal string (ENOTFOUND host:port). The Host header keeps the port,
+// which is exactly what SigV4 signs.
+var ENDPOINT_HOST = CONFIG.endpoint;
+var ENDPOINT_PORT = null;
+var endpointWithPort = /^([^:]+):(\d{1,5})$/.exec(CONFIG.endpoint);
+if (endpointWithPort) {
+  ENDPOINT_HOST = endpointWithPort[1];
+  ENDPOINT_PORT = Number(endpointWithPort[2]);
+}
+if (!/^https?:\/\//i.test(CONFIG.public_url)) {
+  console.error("CONFIG_INVALID: public_url must start with https:// (e.g. https://pub-XXXX.r2.dev), got: " + CONFIG.public_url);
+  process.exit(1);
+}
 
 var CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -185,7 +226,7 @@ function parseR2Error(xml) {
 // ── General S3 Request ──
 // All S3 operations go through this single signing path.
 // extraHeaders: signed AND sent. Content-Length + auth added automatically.
-function s3Fetch(method, resourcePath, query, payload, extraHeaders) {
+function s3FetchOnce(method, resourcePath, query, payload, extraHeaders) {
   var region = CONFIG.region || "auto";
   if (typeof payload === "string") payload = Buffer.from(payload, "utf-8");
   if (!payload) payload = Buffer.alloc(0);
@@ -226,6 +267,10 @@ function s3Fetch(method, resourcePath, query, payload, extraHeaders) {
       "x-amz-content-sha256": payloadHash,
       "x-amz-date": amzDate,
       Authorization: auth,
+      // Node omits the default port (443) from the Host header it generates, while
+      // the signature below covers CONFIG.endpoint including an explicit :443.
+      // Send the signed value verbatim so the server and the signature agree.
+      Host: CONFIG.endpoint,
     };
     if (payload.length > 0) reqHeaders["Content-Length"] = payload.length;
     if (extraHeaders) {
@@ -236,7 +281,8 @@ function s3Fetch(method, resourcePath, query, payload, extraHeaders) {
 
     var req = https.request(
       {
-        hostname: CONFIG.endpoint,
+        hostname: ENDPOINT_HOST,
+        port: ENDPOINT_PORT || undefined,
         path: encodedPath + (canonicalQS ? "?" + canonicalQS : ""),
         method: method,
         timeout: 30000,
@@ -252,7 +298,11 @@ function s3Fetch(method, resourcePath, query, payload, extraHeaders) {
         res.on("end", function () {
           var body = Buffer.concat(chunks).toString("utf-8");
           if (res.statusCode >= 200 && res.statusCode < 300) resolve({ status: res.statusCode, body: body });
-          else reject(new Error("HTTP " + res.statusCode + " — " + parseR2Error(body)));
+          else {
+            var err = new Error("HTTP " + res.statusCode + " — " + parseR2Error(body));
+            err.statusCode = res.statusCode;
+            reject(err);
+          }
         });
       }
     );
@@ -260,6 +310,29 @@ function s3Fetch(method, resourcePath, query, payload, extraHeaders) {
     req.on("error", reject);
     req.end(payload.length > 0 ? payload : undefined);
   });
+}
+
+// Every request this script makes (PUT object, GET/PUT/DELETE ?lifecycle) is idempotent,
+// so transient failures are retried: throttling (429), server errors (5xx), and network
+// errors — notably ECONNRESET on a keep-alive socket the server already closed, which
+// otherwise failed a whole setup run on one stale connection. 4xx answers are final.
+var MAX_ATTEMPTS = 3;
+function isTransient(e) {
+  if (e.statusCode) return e.statusCode === 429 || e.statusCode >= 500;
+  return true; // no HTTP status: socket/DNS/timeout
+}
+function s3Fetch(method, resourcePath, query, payload, extraHeaders) {
+  var attempt = 0;
+  function tryOnce() {
+    attempt++;
+    return s3FetchOnce(method, resourcePath, query, payload, extraHeaders).catch(function (e) {
+      if (attempt >= MAX_ATTEMPTS || !isTransient(e)) throw e;
+      var delay = 500 * Math.pow(2, attempt - 1);
+      console.error("  retry " + attempt + "/" + (MAX_ATTEMPTS - 1) + " after " + (e.message || e) + "");
+      return new Promise(function (r) { setTimeout(r, delay); }).then(tryOnce);
+    });
+  }
+  return tryOnce();
 }
 
 // ── File Upload ──
@@ -276,16 +349,16 @@ function cacheControlFor(remoteKey) {
   return CACHE_SHORT;
 }
 
-function putObject(payload, remoteKey, contentType) {
-  var ct = contentType || getContentType(remoteKey);
+function putObject(payload, remoteKey) {
+  var ct = getContentType(remoteKey);
   return s3Fetch("PUT", "/" + CONFIG.bucket + "/" + remoteKey, null, payload, {
     "Content-Type": ct,
     "Cache-Control": cacheControlFor(remoteKey),
   }).then(function () { console.log("  OK  " + remoteKey); });
 }
 
-function uploadFile(localPath, remoteKey, contentType) {
-  return putObject(fs.readFileSync(localPath), remoteKey, contentType);
+function uploadFile(localPath, remoteKey) {
+  return putObject(fs.readFileSync(localPath), remoteKey);
 }
 
 // Bundled assets use fixed filenames + immutable caching, so a docsify upgrade
@@ -300,19 +373,46 @@ function versionIndexHtml(html, version) {
 }
 
 // ── Server Deployment ──
-function serverDirHash() {
-  var serverDir = path.join(SCRIPT_DIR, "docsify-server");
-  var hash = crypto.createHash("sha256");
+// One listing feeds both the fingerprint and the upload, so they can never disagree.
+// Dot-files are skipped: .nojekyll only matters to GitHub Pages, ClawHub's bundle drops
+// dot-files anyway (so a checkout and an install used to fingerprint differently), and
+// .DS_Store and friends have no business being published to a public bucket.
+var SERVER_DIR = path.join(SCRIPT_DIR, "docsify-server");
+var JUNK = ["Thumbs.db", "desktop.ini"];
+function listServerFiles() {
+  var out = [];
   function walk(dir, prefix) {
-    fs.readdirSync(dir).sort().forEach(function (name) {
+    var names;
+    try {
+      names = fs.readdirSync(dir).sort();
+    } catch (e) {
+      // The viewer files ship with the skill, so a missing directory is a broken
+      // install. Say that in the documented error vocabulary instead of letting
+      // a raw ENOENT stack escape to the caller.
+      throw new Error("the viewer assets are missing from " + dir + " (" + (e.code || e.message) + ") — reinstall the skill");
+    }
+    names.forEach(function (name) {
+      if (name.charAt(0) === "." || JUNK.indexOf(name) !== -1) return;
       var full = path.join(dir, name);
-      var rel = prefix ? prefix + "/" + name : name;
-      if (fs.statSync(full).isDirectory()) { walk(full, rel); }
-      else { hash.update(rel); hash.update(fs.readFileSync(full)); }
+      var key = prefix ? prefix + "/" + name : name;
+      if (fs.statSync(full).isDirectory()) walk(full, key);
+      else out.push({ full: full, key: key });
     });
   }
-  walk(serverDir, "");
-  return hash.digest("hex").slice(0, 12);
+  walk(SERVER_DIR, "");
+  return out;
+}
+
+var _serverHash = null;
+function serverDirHash() {
+  if (_serverHash) return _serverHash;
+  var hash = crypto.createHash("sha256");
+  listServerFiles().forEach(function (f) {
+    hash.update(f.key);
+    hash.update(fs.readFileSync(f.full));
+  });
+  _serverHash = hash.digest("hex").slice(0, 12);
+  return _serverHash;
 }
 
 // Lifecycle administration is opt-in. It is a bucket-level request and needs an
@@ -370,6 +470,16 @@ function rulesFrom(xml) {
   return out;
 }
 
+// Everything directly under <LifecycleConfiguration> that is not a <Rule>: S3 adds
+// bucket-wide settings there (e.g. TransitionDefaultMinimumObjectSize) and a rewrite
+// that re-emits only <Rule> elements deletes them without ever showing them.
+function topLevelExtras(xml) {
+  var inner = String(xml || "")
+    .replace(/^[\s\S]*?<LifecycleConfiguration(?:\s[^>]*)?>/, "")
+    .replace(/<\/LifecycleConfiguration>\s*$/, "");
+  return inner.replace(/<Rule(?:\s[^>]*)?>[\s\S]*?<\/Rule>/g, "").trim();
+}
+
 // Scoped to md-web's own uploads (the "md-web/" key prefix) — never the viewer
 // files at the bucket root, nor any unrelated object sharing the bucket.
 function expiryRule(days) {
@@ -380,9 +490,9 @@ function expiryRule(days) {
     '</Rule>';
 }
 
-function putLifecycle(rules) {
+function putLifecycle(rules, extras) {
   var xml = '<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
-    rules.join("") + '</LifecycleConfiguration>';
+    (extras || "") + rules.join("") + '</LifecycleConfiguration>';
   var payload = Buffer.from(xml, "utf-8");
   var md5 = crypto.createHash("md5").update(payload).digest("base64");
   return s3Fetch("PUT", "/" + CONFIG.bucket, "lifecycle", payload, {
@@ -400,7 +510,13 @@ function setLifecycleRule() {
 
   return readLifecycle()
     .then(function (existing) {
+      // A 200 body we cannot parse is NOT "the bucket has no rules". Writing back
+      // only md-web's own rule would delete retention rules we never read, so an
+      // unreadable configuration aborts the write instead of overwriting it.
+      if (existing.trim() && !/<LifecycleConfiguration[\s>]/i.test(existing))
+        throw new Error("the bucket answered with something that is not a LifecycleConfiguration; refusing to rewrite the lifecycle configuration");
       var others = rulesFrom(existing);
+      var extras = topLevelExtras(existing);
       var wanted = days > 0 ? [expiryRule(days)] : [];
 
       if (!wanted.length && !others.length) {
@@ -411,11 +527,18 @@ function setLifecycleRule() {
           console.log("  Lifecycle: nothing to remove");
           return null;
         }
+        // DELETE removes the whole document, including top-level settings that are
+        // not rules; keep those by rewriting a configuration with only the extras.
+        if (extras) {
+          return putLifecycle([], extras).then(function () {
+            console.log("  Lifecycle: no expiry (the md-web rule was removed; other settings preserved)");
+          });
+        }
         return s3Fetch("DELETE", "/" + CONFIG.bucket, "lifecycle")
           .then(function () { console.log("  Lifecycle: no expiry"); });
       }
 
-      return putLifecycle(wanted.concat(others)).then(function () {
+      return putLifecycle(wanted.concat(others), extras).then(function () {
         console.log("  Lifecycle: " + (days > 0 ? days + " days (md-web/ only)" : "no expiry (only the md-web rule was removed)"));
       });
     })
@@ -442,24 +565,9 @@ function serverDeployed() {
 }
 
 function deployServer() {
-  var serverDir = path.join(SCRIPT_DIR, "docsify-server");
-  var files = [];
-  var indexFile = null;
-
-  function walk(dir, prefix) {
-    fs.readdirSync(dir).forEach(function (name) {
-      var full = path.join(dir, name);
-      var key = prefix ? prefix + "/" + name : name;
-      if (fs.statSync(full).isDirectory()) {
-        walk(full, key);
-      } else if (key === "index.html") {
-        indexFile = { full: full, key: key };
-      } else {
-        files.push({ full: full, key: key });
-      }
-    });
-  }
-  walk(serverDir, "");
+  var all = listServerFiles();
+  var indexFile = all.filter(function (f) { return f.key === "index.html"; })[0] || null;
+  var files = all.filter(function (f) { return f.key !== "index.html"; });
 
   // Parallel upload (work-stealing, 4 concurrent)
   var concurrency = 4;
@@ -504,14 +612,53 @@ var UPLOAD_PREFIX = "md-web/";
 
 var DOC_EXTS = [".md", ".markdown", ".txt"];
 
+// The key is the public URL. Characters such as "#", "?", "%", spaces, slashes or
+// non-ASCII text either break the hash route outright or turn into an unreadable
+// percent-encoded link, so the key is reduced to a lowercase ASCII slug here rather than
+// trusting every caller to have followed the naming rule.
+function slugify(base) {
+  var s = String(base).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-").replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
+  return s.slice(0, 80).replace(/[-.]+$/, "") || "doc";
+}
+
 function addTimestamp(key) {
+  key = path.basename(String(key).replace(/\\/g, "/"));
   var ext = path.extname(key);
   var base = key.slice(0, key.length - ext.length);
   // Strip only an extension we recognise. path.extname() calls everything after the last
   // dot an extension, so "v1.2-release-notes" reported ".2-release-notes" and dropping it
   // shipped the document as "v1.md" — silently truncated, with a 200 on the URL to hide it.
   if (DOC_EXTS.indexOf(ext.toLowerCase()) === -1) base = key;
-  return timestamp() + "-" + base + ".md";
+  var slug = slugify(base);
+  if (slug !== base) console.log("  Note: remote key normalized to \"" + slug + "\"");
+  // The timestamp only has second resolution and the slug is lossy (every name without
+  // ASCII letters or digits collapses to "doc"), so two documents published in the same
+  // second could land on the same key: the second PUT would overwrite the first, and the
+  // first URL would keep answering 200 with someone else's document. A short random
+  // suffix makes every publish land on its own object.
+  return timestamp() + "-" + slug + "-" + crypto.randomBytes(2).toString("hex") + ".md";
+}
+
+// Docsify 4 has no front-matter support: a leading YAML block renders as a horizontal
+// rule followed by a setext <h2> made of the raw YAML. Strip it (and a UTF-8 BOM) from
+// the uploaded copy only; the local file is never modified.
+//
+// Only a real YAML block is stripped. A Markdown document may legitimately open with a
+// thematic break (---), and matching "the first --- ... the next ---" deleted everything
+// in between — the title and the intro of a release-notes file — while the published URL
+// still answered 200 with the truncated body. So the block must carry at least one YAML
+// mapping key; a run of prose between two rules is left alone.
+var YAML_KEY_LINE = /^[ \t]*(?:["'][^"']+["']|[A-Za-z_][\w.-]*)[ \t]*:(?:[ \t]|$)/;
+function prepareMarkdown(buf) {
+  var text = buf.toString("utf-8").replace(/^\uFEFF/, "");
+  var m = text.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/);
+  if (m && m[1].split(/\r?\n/).some(function (line) { return YAML_KEY_LINE.test(line); })) {
+    text = text.slice(m[0].length).replace(/^\s*\r?\n/, "");
+    console.log("  Note: YAML front matter stripped from the published copy");
+  }
+  if (!text.trim()) throw new Error("document is empty after removing front matter");
+  return Buffer.from(text, "utf-8");
 }
 
 // ── Main ──
@@ -530,10 +677,10 @@ function setup() {
 function publish() {
   return serverDeployed().then(function (deployed) {
     if (!deployed) {
-      throw new Error("the viewer is not provisioned for this bucket yet. Run once: node " + SCRIPT_NAME + " " + SETUP_FLAG);
+      throw new Error("SETUP_REQUIRED: the viewer is not provisioned for this bucket/version yet. Run once: " + SCRIPT_CMD + " " + SETUP_FLAG);
     }
     var key = UPLOAD_PREFIX + addTimestamp(args[1]);
-    return uploadFile(localPath, key).then(function () {
+    return putObject(prepareMarkdown(fs.readFileSync(localPath)), key).then(function () {
       var name = key.replace(/\.md$/i, "");
       // The key is percent-encoded on the way in (uriEncodePath in s3Fetch), so it has to be
       // encoded on the way out too: a raw space ends the link the moment anything parses it.
@@ -542,7 +689,13 @@ function publish() {
   });
 }
 
-(isSetup ? setup() : publish())
+// setup() reads the viewer directory synchronously, so a missing file throws
+// before any promise exists. Without this wrapper the throw escapes as a raw
+// stack trace and the documented UPLOAD_FAILED contract never appears.
+Promise.resolve()
+  .then(function () {
+    return isSetup ? setup() : publish();
+  })
   .then(function () {
     agent.destroy();
   })

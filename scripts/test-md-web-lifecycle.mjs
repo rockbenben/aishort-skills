@@ -48,7 +48,7 @@ const OUR_RULE = (days) =>
   `<Rule><ID>md-web-auto-expire</ID><Filter><Prefix>md-web/</Prefix></Filter><Status>Enabled</Status><Expiration><Days>${days}</Days></Expiration></Rule>`;
 
 /** Run upload.js --setup against a scripted S3 and return every request it made. */
-function runSetup(config, s3) {
+function runSetup(config, s3, waitMs = 250) {
   const home = mkdtempSync(join(tmpdir(), "md-web-test-"));
   try {
     mkdirSync(join(home, ".md-web"));
@@ -59,7 +59,7 @@ function runSetup(config, s3) {
     const fakeHttps = {
       Agent: class { destroy() {} },
       request(options, callback) {
-        const call = { method: options.method, path: options.path, body: null };
+        const call = { method: options.method, path: options.path, body: null, headers: options.headers };
         calls.push(call);
         const listeners = {};
         const req = {
@@ -97,7 +97,7 @@ function runSetup(config, s3) {
     runInContext(readFileSync(UPLOAD_JS, "utf8"), sandbox, { filename: UPLOAD_JS });
     // The script is promise-driven; let the microtask/timer chain drain before the
     // temp config dir disappears under it.
-    return new Promise((resolveRun) => setTimeout(() => resolveRun({ calls, out }), 250));
+    return new Promise((resolveRun) => setTimeout(() => resolveRun({ calls, out }), waitMs));
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -224,6 +224,112 @@ const okPut = (call) => ({ status: 200, body: "" });
     call.path.includes("?lifecycle") ? { status: 200, body: xml([USER_RULE]) } : okPut(call));
   if (lifecycleOf(calls).length) fail("expire_days: \"forever\" still sent lifecycle requests");
   else pass('expire_days: "forever" → warned about, bucket left alone');
+}
+
+// ── Transient failures are retried; a 4xx is final ──
+{
+  let first = null;
+  const run = await runSetup({ ...baseConfig }, (call) => {
+    if (!first) { first = { method: call.method, path: call.path }; return { status: 500, body: "<Error><Code>InternalError</Code></Error>" }; }
+    return okPut(call);
+  }, 2500);
+  const tries = run.calls.filter((c) => c.method === first.method && c.path === first.path).length;
+  if (tries !== 2) fail(`a 500 was not retried exactly once (${tries} attempts)${why(run)}`);
+  else if (!run.out.some((l) => l.includes("retry 1/2"))) fail(`no retry note in the output${why(run)}`);
+  else pass("a 500 is retried once and the setup completes");
+}
+{
+  let first = null;
+  const run = await runSetup({ ...baseConfig }, (call) => {
+    if (!first) { first = { method: call.method, path: call.path }; return { status: 403, body: "<Error><Code>AccessDenied</Code></Error>" }; }
+    return okPut(call);
+  }, 800);
+  const tries = run.calls.filter((c) => c.method === first.method && c.path === first.path).length;
+  if (tries !== 1) fail(`a 403 was retried (${tries} attempts)${why(run)}`);
+  else pass("a 403 is final, not retried");
+}
+
+// ── The retry budget is finite, and a give-up is loud ──
+{
+  const run = await runSetup({ ...baseConfig }, () => ({ status: 500, body: "<Error><Code>InternalError</Code></Error>" }), 8000);
+  // The budget is per request: every upload is tried once and then retried twice.
+  const byPath = new Map();
+  for (const c of run.calls) byPath.set(c.path, (byPath.get(c.path) || 0) + 1);
+  const attempts = [...byPath.values()];
+  if (!attempts.length || !attempts.every((n) => n === 3)) fail(`a persistent 500 was not retried up to the budget (${JSON.stringify([...byPath])})${why(run)}`);
+  else if (!run.out.some((l) => l.includes("retry 2/2"))) fail(`no second-retry note in the output${why(run)}`);
+  else if (!run.out.some((l) => l.includes("UPLOAD_FAILED"))) fail(`a give-up after the budget was not reported${why(run)}`);
+  else pass("a persistent 500 is retried up to the budget and then fails the run");
+}
+
+// ── 429 is transient ──
+{
+  let first = true;
+  const run = await runSetup({ ...baseConfig }, (call) => {
+    if (first) { first = false; return { status: 429, body: "" }; }
+    return okPut(call);
+  }, 2500);
+  if (run.calls.length < 2) fail(`a 429 was not retried (${run.calls.length} attempts)${why(run)}`);
+  else pass("429 is transient and is retried");
+}
+
+// ── A lifecycle body we cannot parse must never be written back ──
+{
+  const run = await runSetup({ ...baseConfig, expire_days: 30 }, (call) =>
+    call.path.includes("?lifecycle")
+      ? { status: 200, body: "<html><body>not a lifecycle configuration</body></html>" }
+      : okPut(call));
+  const writes = lifecycleOf(run.calls).filter((c) => c.method !== "GET");
+  if (writes.length) fail(`an unparseable lifecycle body was written back: ${JSON.stringify(writes)}${why(run)}`);
+  else if (!run.out.some((l) => /not a LifecycleConfiguration/.test(l))) fail(`the refusal was not reported${why(run)}`);
+  else pass("an unreadable lifecycle body is refused instead of overwriting the bucket's own rules");
+}
+
+// ── An explicit :443 endpoint is signed with the port and must be sent with it ──
+// Node omits the default port from the Host header it generates, so without an
+// explicit Host the server sees "host" while the signature covers "host:443".
+{
+  const cfg = { ...baseConfig, endpoint: "acct.r2.cloudflarestorage.com:443" };
+  const run = await runSetup(cfg, okPut);
+  const hosts = [...new Set(run.calls.map((c) => c.headers && c.headers.Host))];
+  if (hosts.length !== 1 || hosts[0] !== cfg.endpoint)
+    fail(`an explicit :443 endpoint was not sent as the signed Host (${JSON.stringify(hosts)})${why(run)}`);
+  else pass("an explicit :443 endpoint is sent as the Host header it signs");
+}
+
+// ── Top-level lifecycle settings survive the read-modify-write ──
+{
+  const existing = xml([
+    "<TransitionDefaultMinimumObjectSize>all_storage_classes_128K</TransitionDefaultMinimumObjectSize>",
+    USER_RULE,
+  ]);
+  const run = await runSetup({ ...baseConfig, expire_days: 30 }, (call) =>
+    call.method === "GET" ? { status: 200, body: existing } : okPut(call));
+  const put = lifecycleOf(run.calls).find((c) => c.method === "PUT");
+  if (!put) fail(`no lifecycle PUT${why(run)}`);
+  else if (!put.body.includes("TransitionDefaultMinimumObjectSize"))
+    fail(`a top-level lifecycle setting was dropped: ${put.body}${why(run)}`);
+  else if (!put.body.includes("keep-my-backups"))
+    fail(`the user's own rule was dropped: ${put.body}${why(run)}`);
+  else pass("top-level lifecycle settings are preserved alongside the rules");
+}
+
+// ── Removing our rule must not DELETE top-level settings that are not rules ──
+{
+  const existing = xml([
+    OUR_RULE(30),
+    "<TransitionDefaultMinimumObjectSize>all_storage_classes_128K</TransitionDefaultMinimumObjectSize>",
+  ]);
+  const run = await runSetup({ ...baseConfig, expire_days: 0 }, (call) =>
+    call.method === "GET" ? { status: 200, body: existing } : okPut(call));
+  const writes = lifecycleOf(run.calls).filter((c) => c.method !== "GET");
+  if (writes.length !== 1 || writes[0].method !== "PUT")
+    fail(`expire_days 0 did not rewrite a config that holds other settings: ${JSON.stringify(writes.map((c) => c.method))}${why(run)}`);
+  else if (!writes[0].body.includes("TransitionDefaultMinimumObjectSize"))
+    fail(`a top-level lifecycle setting was deleted: ${writes[0].body}${why(run)}`);
+  else if (writes[0].body.includes("md-web-auto-expire"))
+    fail(`our rule was not removed: ${writes[0].body}${why(run)}`);
+  else pass("expire_days 0 keeps top-level lifecycle settings instead of deleting the document");
 }
 
 console.error(`\n${failures} failure(s)`);

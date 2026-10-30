@@ -1,6 +1,6 @@
 # MD Web
 
-Turn any content into a web page with a shareable URL. Uploads Markdown to an S3-compatible storage bucket, rendered by Docsify.
+> Turn any content into a web page with a shareable URL. Uploads Markdown to an S3-compatible storage bucket, rendered by Docsify.
 
 [中文文档](README.zh.md)
 
@@ -28,8 +28,8 @@ it needs; use whichever path your agent documents.
 
 1. Install the skill (see above)
 2. On first use, the AI will guide you through bucket configuration
-3. The AI then provisions the viewer once — a separate step that writes the page shell to
-   your bucket, and again after any upgrade of the skill
+3. The AI then provisions the viewer once — a separate step that writes the page shell
+   and its assets to your bucket, and again after any upgrade of the skill
 4. After that, tell the AI "share as a link" whenever you want to publish content as a web page
 
 ## Bucket Setup
@@ -106,13 +106,13 @@ bucket root and any unrelated object are never touched, and **rules you set your
 preserved**: the script reads the bucket's lifecycle configuration, drops only its own
 rule, and writes the rest back unchanged.
 
-Managing it needs an **Admin Read & Write** token. With a narrower token the upload
-still succeeds and a warning goes by in the output — set the rule in the dashboard
+Managing it needs an **Admin Read & Write** token. With a narrower token the setup
+step still succeeds and a warning goes by in the output — set the rule in the dashboard
 instead. Re-run the one-time setup step after changing it.
 
 ## Security
 
-- **Anything you upload is publicly accessible** at the returned URL, and publishing cannot be undone — never upload secrets, API keys, PII, or other sensitive content.
+- **Anything you upload is publicly accessible** at the returned URL, and there is no un-publish step (unless `expire_days` is set, which auto-deletes the uploaded file after N days) — never upload secrets, API keys, PII, or other sensitive content.
 - Credentials live in **plaintext** in `~/.md-web/config.json`, or in `MD_WEB_ACCESS_KEY` / `MD_WEB_SECRET_KEY` if you prefer to keep them out of a file. On macOS and Linux the script tightens the config file to owner-only access; protect it either way — don't commit it or share it.
 - **Use a dedicated bucket.** Uploads and any expiry rule are namespaced under `md-web/`, but a dedicated bucket keeps this skill's bucket-administration rights away from anything you actually care about.
 - **The viewer renders your Markdown as HTML**, so `<details>` blocks, alignment and inline images work. Two things keep that safe: a route guard that only loads same-origin paths under `md-web/` (a crafted link cannot make the viewer fetch a document from another origin), and a Content-Security-Policy without `'unsafe-inline'`, so HTML inside a document cannot run script. Treat the domain as public either way.
@@ -128,7 +128,6 @@ md-web/                     # Skill directory (managed by ClawHub, may be replac
 └── docsify-server/       # Viewer files (uploaded by the one-time setup step)
     ├── index.html
     ├── README.md
-    ├── .nojekyll
     └── assets/           # JS/CSS assets (bundled locally, no CDN dependency)
         ├── config.js     # Viewer configuration + document-route guard
         ├── docsify.min.js
@@ -140,7 +139,7 @@ md-web/                     # Skill directory (managed by ClawHub, may be replac
 └── .deployed             # Deploy fingerprint (tracks server deployment state)
 ```
 
-`.nojekyll` never reaches an installed copy: ClawHub's publish bundle skips every dot-named file, so it exists only in a working checkout of this repo. `upload.js` hashes the whole `docsify-server/` directory to build the fingerprint in `.deployed`, which means a checkout and an install produce different fingerprints — so switching between the two means running the setup step once more. Nothing is lost by it: `.nojekyll` only matters to GitHub Pages, and this skill publishes to R2 or another S3-compatible bucket.
+`upload.js` fingerprints the files in `docsify-server/` (dot-files are ignored and never uploaded) and stores the result in `~/.md-web/.deployed`. When the bundled viewer changes after an upgrade, publishing stops with `SETUP_REQUIRED` until the setup step is run once more.
 
 ## Other S3-Compatible Services
 

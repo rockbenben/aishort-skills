@@ -10,8 +10,8 @@
  * then inserts the returned Markdown as HTML with sanitizing off. A crafted link
  * (`#https://someone-elses-host/x.md`, on a host that answers with CORS) therefore
  * rendered attacker-controlled HTML on this origin. The guard refuses every route that
- * is not a same-origin path under md-web/, and connect-src 'self' blocks the fetch
- * behind it.
+ * is not a same-origin path under md-web/ (the landing page and #/index.html excepted),
+ * and connect-src 'self' blocks the fetch behind it.
  *
  * The guard runs as a plain browser script, so it is exercised the way a browser runs
  * it — in a vm context with location/history/window stubs — rather than by importing

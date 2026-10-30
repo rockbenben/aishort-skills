@@ -1,7 +1,7 @@
 ---
 name: md-web
-version: 1.2.2
-description: Use when markdown should become a shareable web page or link. Uploads to your S3 bucket and the URL is public, so only on request. 做成网页 / 分享为链接.
+version: 1.3.0
+description: Publish Markdown as a web page via the user's own S3 bucket, rendered by Docsify; return a shareable link. Use only when the user asks for a web page, online preview, published page or share link (做成网页 / 生成网页链接 / 分享为链接 / 发布到网上 / /md-web).
 
 metadata:
   openclaw:
@@ -23,125 +23,92 @@ metadata:
 
 # MD Web - Markdown to Web Page
 
-Upload raw `.md` files to an S3-compatible storage bucket, where a pre-deployed Docsify server automatically renders them as web pages. This avoids sending long text in the conversation.
+Upload one raw `.md` file to the user's S3-compatible bucket; a Docsify viewer already in that bucket renders it at a public URL. `{SKILL_DIR}` below is this skill's base directory — always keep it quoted.
 
-## When to use this skill
+## Ground rules
 
-**Uploaded content is publicly accessible, and publishing cannot be undone.** Only use this skill when the user explicitly requests it:
+- **Public.** Anyone with the link can read it, and there is no un-publish step — unless `expire_days` is set, which auto-deletes the uploaded file after N days. Before the first upload in a session, tell the user that in one sentence and wait for a go-ahead, unless their request already asked for a public/shareable link.
+- **Explicit requests only.** "整理一下" or "看看效果" is not a request to publish — answer in chat instead.
+- **Check the content first.** If it contains credentials, tokens, private keys, internal URLs or personal data, point it out and get confirmation (or redact) before uploading.
+- Upload raw Markdown. Never generate HTML.
 
-- User wants to **show or preview content as a web page** in a browser
-- User wants to **generate, export, or publish** content as a web page
-- User wants a **shareable link** to content
-- User wants output **delivered as a web page** rather than as long text in chat
-- User wants to **compile or organize content and present it as a web page**
-- User invokes this skill by name (e.g., `/md-web`)
+## Workflow
 
-Before the first upload of a session, tell the user the document will be readable by
-anyone with the link, and wait for their go-ahead. Publishing to a public URL is not
-something to infer from "整理一下" or "看看效果" — if the user did not ask for a web page
-or a link, answer in chat instead.
+### 1. Configuration
 
-## How to use this skill
+Check for `~/.md-web/config.json` (`%USERPROFILE%\.md-web\config.json` on Windows). If it is missing or incomplete, run **First-time configuration** below.
 
-### Step 1: Check configuration
+Exception: if it is missing but a legacy `config.json` sits next to `upload.js`, skip the wizard and just upload — the script migrates it (and `.deployed`) to `~/.md-web/` and prints `Config migrated to:`.
 
-Check if `~/.md-web/config.json` exists (cross-platform: use the user's home directory). If it does NOT exist or has empty fields, follow the **Configuration** section below first.
+### 2. Prepare the file
 
-One exception: an older install kept `config.json` in the skill's own directory rather than in the home directory. If `~/.md-web/config.json` is absent but that legacy file is sitting next to `upload.js`, skip the wizard and run the upload — the script copies both it and `.deployed` into `~/.md-web/` and prints `Config migrated to:`. Running the wizard instead would ask the user for credentials that are already on disk.
+Use the existing `.md` file, or write the content to a temp file (`/tmp/` on Linux/macOS; `$TEMP` in Git Bash, `%TEMP%` in cmd). Delete temp files you created after the upload.
 
-### Step 2: Prepare the markdown file
+Viewer limits — write for them:
+- Only the `.md` is uploaded: relative images (`![](a.png)`) break. Use absolute `https://` image URLs.
+- GFM, tables, `<details>` and inline HTML render; scripts never run. **Mermaid and LaTeX/KaTeX are not rendered** (shown as code) — use tables, lists or images instead.
+- Start with a `# Title`: it becomes the browser tab title. YAML front matter is stripped automatically.
 
-Either use an existing `.md` file, or write the content to a temporary file. Choose the temp path based on the current platform (e.g., `/tmp/` on Linux/macOS, `%TEMP%\` on Windows — note Git Bash does not expand `%TEMP%`, so use `$TEMP` there). Use whichever path works in the current shell environment. Delete a temp file you created once the upload reports its URL.
-
-**Only the `.md` file itself is uploaded.** Relative image references (`![](diagram.png)`) will be broken on the page — tell the user to use absolute image URLs for documents that need pictures.
-
-### Step 3: Provision the viewer (once)
-
-```bash
-node "{SKILL_DIR}/upload.js" --setup
-```
-
-Run this before the first upload on a machine, and again after upgrading the skill —
-it is what makes the published links work. It writes the viewer files (`index.html`
-and `assets/`) to the bucket root, which is shared state that every published
-document depends on, so it is a command of its own rather than something an upload
-does on the side. It also applies the `expire_days` setting from `config.json`.
-
-- `{SKILL_DIR}`: the base directory of this skill (shown at the top when skill is loaded). Keep it inside quotes — a skills directory under a path with spaces breaks the shell otherwise.
-- Re-run it after the user changes `expire_days`, `bucket` or `public_url`. It is safe to repeat.
-- Skip it once `.deployed` in `~/.md-web/` already matches this bucket and these files; the upload command below reports when setup is needed.
-
-### Step 4: Upload via upload.js
+### 3. Publish
 
 ```bash
 node "{SKILL_DIR}/upload.js" <local-file> <remote-key>
 ```
 
-- `<remote-key>`: a short **ASCII, lowercase, hyphenated** name with no spaces (e.g., `api-docs.md`, `project-guide.md`) — use this even when the document's own title is Chinese, because the key is what appears in the public URL. A timestamp is prepended automatically to avoid filename collisions, the extension is forced to `.md`, and the object lands under the `md-web/` prefix.
-- This writes exactly one object. It refuses to run before Step 3, rather than silently provisioning the site on the way to publishing a document.
-- If Step 3 printed a lifecycle warning — `Warning: lifecycle —` — the token lacks Admin Read & Write: grant the permission and re-run `--setup`, or set the rule in the Cloudflare Dashboard.
+- `<remote-key>`: short lowercase ASCII slug describing the content, e.g. `api-docs`, even for Chinese documents. The script slugifies whatever it gets — a key with no ASCII letters or digits collapses to `doc` — prepends a timestamp, appends a short random suffix so two documents published in the same second cannot land on the same object, forces `.md` and stores it under `md-web/`.
+- If stderr contains `SETUP_REQUIRED`, run the one-time viewer setup, then re-run the same publish command:
 
-### Step 5: Return the result
+  ```bash
+  node "{SKILL_DIR}/upload.js" --setup
+  ```
 
-- **On success**: the script prints the URL. Reply with only the filename and clickable link. Do NOT paste the markdown content into the chat.
-- **On failure** (non-zero exit code): report the error to the user, then fall back to sending the markdown content as text directly in the chat.
+  Setup writes `index.html`, `README.md` and `assets/` to the bucket root and applies `expire_days`. It is idempotent; it is needed on first use, after a skill upgrade, and after changing `bucket` or `endpoint` — those two are what the deploy fingerprint covers, so publish asks for setup again after either. Changing `expire_days` needs a re-run too, but publish will not ask: run it yourself. Changing `public_url` only changes the link that gets printed.
+- `Warning: lifecycle —` during setup means the bucket lifecycle could not be read or written — usually the token lacks **Admin Read & Write**. The viewer still works; tell the user to grant that permission and re-run setup, or set the rule in the provider dashboard.
+- Re-publishing creates a **new** link; the old one stays live.
 
-Example success output:
-> `api-docs` - https://example.r2.dev/index.html#/md-web/20260305-091500-api-docs
+### 4. Reply
 
-## Configuration
+- **Success:** the last stdout line is the URL. Reply with the document name and the clickable link only — do not paste the Markdown into chat. Example: `api-docs` — https://pub-xxxx.r2.dev/index.html#/md-web/20260305-091500-api-docs-4f2a
+- **Failure** (non-zero exit, `UPLOAD_FAILED` / `CONFIG_MISSING` / `CONFIG_INVALID` / `Missing config fields`): report the error in one line with the likely fix (table below), then deliver the content in chat.
 
-This only needs to happen once. On subsequent runs, `config.json` already exists.
+| Error contains | Likely cause |
+|---|---|
+| `SignatureDoesNotMatch`, `InvalidAccessKeyId` | Wrong keys, or wrong `region` (`auto` for R2; the real region for AWS) |
+| `AccessDenied` on upload | Token lacks Object Read & Write, or is scoped to another bucket |
+| `NoSuchBucket` | Typo in `bucket`, or endpoint of another account |
+| `ENOTFOUND`, `CONFIG_INVALID` | `endpoint` must be a bare hostname; `public_url` must start with `https://` |
+| `Missing config fields` | `config.json` is incomplete — fill in the fields it lists, or set `MD_WEB_ACCESS_KEY` / `MD_WEB_SECRET_KEY` for the two keys |
+| Link opens the "Looking for a document?" page | Document expired (`expire_days`) or `public_url` points to another bucket |
 
-1. Tell the user this skill needs an S3-compatible storage bucket with public access. Point them to `{SKILL_DIR}/README.md` for detailed setup instructions (Cloudflare R2 / AWS S3 / other S3-compatible services), or `{SKILL_DIR}/README.zh.md` when the user works in Chinese — the same document in the other language, with identical steps.
-2. Ask the user to provide these 5 required fields:
-   - **access_key**: API access key ID
-   - **secret_key**: API secret access key
-   - **endpoint**: S3 endpoint hostname, without `https://` (e.g., `ACCOUNT_ID.r2.cloudflarestorage.com`)
-   - **bucket**: bucket name
-   - **public_url**: public access URL. If the user has a custom domain bound to the bucket, use that (e.g., `https://docs.example.com`); otherwise use the default R2.dev URL (e.g., `https://pub-XXXX.r2.dev`). **Recommend custom domain** for production use — R2.dev URLs have rate limits.
+## First-time configuration
 
-   If the user would rather not keep a long-lived secret in a file, say that `access_key` and `secret_key` can be left out of `config.json` and supplied as the `MD_WEB_ACCESS_KEY` / `MD_WEB_SECRET_KEY` environment variables instead — the config file wins when both are set.
-3. Ask about optional settings:
-   - **region**: S3 region. Use `auto` for Cloudflare R2, or the actual region for AWS S3 (e.g., `us-east-1`). Default is `auto`.
-   - **expire_days**: how many days before uploaded markdown files are automatically deleted from the bucket. **Leave it unset to keep this skill out of bucket administration entirely** — the default then needs nothing beyond Object Read & Write, and the script never sends a bucket-level request. Set a number of days to have it maintain a single rule scoped to the `md-web/` key prefix; set `0` to have it remove that rule again. Either way the viewer files at the bucket root and unrelated objects are never touched, and rules the user set themselves are preserved: the script reads the bucket's lifecycle configuration, drops only its own rule, and writes the rest back unchanged. Changing this requires an **Admin Read & Write** token — with a narrower one the script warns and carries on, and the user can set the rule in the Cloudflare Dashboard instead.
-4. Write the config to `~/.md-web/config.json` (create the `~/.md-web/` directory if it doesn't exist). Use the user's home directory (`$HOME` on Unix, `%USERPROFILE%` on Windows):
+1. Explain that the skill needs an S3-compatible bucket with public read access. Setup guide: `{SKILL_DIR}/README.md` (Chinese: `{SKILL_DIR}/README.zh.md`) — Cloudflare R2 step by step, plus AWS S3, B2, Spaces, Wasabi, COS endpoints.
+2. Collect the required fields:
+   - `access_key`, `secret_key` — API token credentials (**Object Read & Write** is enough)
+   - `endpoint` — hostname without `https://`, e.g. `ACCOUNT_ID.r2.cloudflarestorage.com`
+   - `bucket`
+   - `public_url` — custom domain if bound (recommended; `r2.dev` URLs are rate-limited), else `https://pub-XXXX.r2.dev`
+
+   Secrets should not travel through chat if avoidable: offer that the user writes `config.json` themselves, or omits the two keys and exports `MD_WEB_ACCESS_KEY` / `MD_WEB_SECRET_KEY` instead (the file wins when both are set).
+3. Optional: `region` (default `auto`; AWS needs the real region, e.g. `us-east-1`) and `expire_days` (auto-delete uploads after N days; `0` removes the rule). **Omit `expire_days` unless the user asks for auto-expiry** — managing it needs an Admin Read & Write token. The script only edits its own `md-web/`-scoped rule and preserves every other lifecycle rule.
+4. Write `~/.md-web/config.json` (create the directory; the script tightens it to `chmod 600` on macOS/Linux):
 
 ```json
 {
   "access_key": "...",
   "secret_key": "...",
-  "endpoint": "...",
-  "bucket": "...",
+  "endpoint": "ACCOUNT_ID.r2.cloudflarestorage.com",
+  "bucket": "md-web",
   "region": "auto",
-  "public_url": "..."
+  "public_url": "https://pub-XXXX.r2.dev"
 }
 ```
 
-Omit `expire_days` unless the user actually asked for auto-expiry — writing it in by default would put every user back on a token that needs bucket-admin rights.
-
-5. Then run Step 3 once to provision the viewer, and Step 4 to publish the document.
-
-## Important notes
-
-- Do NOT generate HTML. Just upload the raw `.md` file — Docsify handles rendering.
-- Do NOT send markdown content to the chat unless upload fails.
-
-## External endpoints
-
-This skill connects only to the S3 endpoint configured by the user in `config.json`. No data is sent to the skill author or any third-party service.
-
-| Endpoint | Purpose | Data sent |
-|----------|---------|-----------|
-| User's S3 endpoint (`config.json → endpoint`) | Upload .md files and Docsify server assets | File content, S3 auth headers |
+5. Run `--setup`, then publish (step 3).
 
 ## Security & privacy
 
-- **Anything you upload becomes publicly accessible** at the returned URL, and there is no undo — never upload secrets, credentials, PII, or other sensitive content.
-- Credentials go in **plaintext** in `~/.md-web/config.json` (outside the skill directory, safe from upgrades) and are only sent to the user's own S3 endpoint for authentication. Two ways to reduce the exposure: put them in the `MD_WEB_ACCESS_KEY` / `MD_WEB_SECRET_KEY` environment variables instead of the file, or keep them in the file and let the script's `chmod 600` stand (it applies on macOS/Linux; Windows file permissions are not changed). Protect the file — don't commit it or share it.
-- **Use a dedicated bucket.** Uploads live under the `md-web/` key prefix and any rule this skill manages is scoped to that prefix, so viewer files and unrelated objects are never expired. A dedicated bucket is still the clean answer: it keeps this skill's bucket-administration rights away from anything you actually care about.
-- **The published viewer renders Markdown from your bucket as raw HTML**, which is what makes `<details>` blocks, alignment and inline images work. It is protected by two things: a route guard (`docsify-server/assets/config.js`) that only ever loads same-origin paths under `md-web/`, so a crafted link cannot make the viewer fetch a document from another origin, and a Content-Security-Policy that keeps `'unsafe-inline'` out of `script-src`, so HTML inside a document cannot run script either. Treat the domain as public and untrusted regardless: it holds documents anyone can publish into your bucket.
-- No telemetry, analytics, or data collection by the skill itself.
-- `upload.js` uses only Node.js built-in modules and all Docsify assets are bundled locally — no third-party dependencies, no CDN at runtime.
-
-By using this skill, markdown content is uploaded to **your own** S3-compatible storage bucket and made publicly accessible. No data is sent to the skill author or any third-party service. Only install if you trust the storage provider you configure.
+- Connects only to the user's own S3 endpoint (file content + SigV4 auth headers). No telemetry, no third-party services, no runtime CDN; `upload.js` uses Node.js built-ins only.
+- Credentials are stored in plaintext in `~/.md-web/config.json` unless provided via environment variables. Never commit or share that file.
+- Recommend a dedicated bucket. Uploads and the optional expiry rule are confined to the `md-web/` prefix.
+- The viewer renders document HTML but is hardened: a route guard (`docsify-server/assets/config.js`) loads only same-origin paths under `md-web/`, and a CSP without `'unsafe-inline'` in `script-src` stops embedded scripts. Still treat the domain as public and untrusted.
