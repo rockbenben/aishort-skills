@@ -38,8 +38,8 @@ const pass = (msg) => console.log(`  ok    ${msg}`);
 
 /** Load config.js in a sandbox that behaves enough like a browser for the guard. */
 function loadViewer(hash) {
-  const calls = { replaceState: [], replace: [], listeners: [] };
-  const location = { hash, pathname: "/index.html", search: "", replace: (url) => calls.replace.push(url) };
+  const calls = { replaceState: [], replace: [], reload: [], listeners: [] };
+  const location = { hash, pathname: "/index.html", search: "", reload: () => calls.reload.push(true), replace: (url) => calls.replace.push(url) };
   const sandbox = {
     location,
     // A real replaceState rewrites location.hash in place, and config.js reads the
@@ -171,5 +171,15 @@ if (configAt === -1 || docsifyAt === -1 || configAt > docsifyAt)
   fail("assets/config.js must load before assets/docsify.min.js so the route is normalized first");
 else pass("assets/config.js loads before docsify.min.js");
 
-console.error(`\n${failures} failure(s)`);
+
+
+// Cross-document navigation rebuilds the search index, while section links retain it.
+for (const [target, expected] of [["#/md-web/b", 1], ["#/md-web/a?id=heading", 0]]) {
+  const ctx = loadViewer("#/md-web/a");
+  ctx.sandbox.location.hash = target;
+  for (const listener of ctx.calls.listeners) listener();
+  if (ctx.calls.reload.length !== expected) fail("unexpected reload count for " + target);
+}
+
+console.log(`\n${failures} failure(s)`);
 process.exit(failures ? 1 : 0);

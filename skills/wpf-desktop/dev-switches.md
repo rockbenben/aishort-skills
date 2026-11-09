@@ -10,6 +10,7 @@ protected override void OnStartup(StartupEventArgs e)
     // …读配置、上主题…
     if (e.Args.Contains("--smoke") || e.Args.Contains("--shots"))
     {
+        ShutdownMode = ShutdownMode.OnExplicitShutdown; // 关闭第一扇测试窗口后仍能布局下一扇
         // 别在 OnStartup 里当场跑：BeginInvoke 到 ApplicationIdle，等消息循环转起来再执行。
         // 实测有应用当场跑时窗口 hwnd=0、尺寸全零（另一个应用却没事，没花时间分辨差异）——
         // 推迟的代价是零，就一律推迟。
@@ -215,6 +216,20 @@ EnumWindows((h, _) => {
 
 UIA 仍然是选控件、点按钮的好工具（`InvokePattern` / `SelectionItemPattern` / `ExpandCollapsePattern` 都好用），只是**找窗口这一步**别指望它。另外按名字找控件时要按 `ControlType` 过滤——`FindFirst(NameProperty, "类型")` 很可能命中的是那个标签 `TextBlock` 而不是它旁边的 `ComboBox`，然后报「不支持的模式」。还有一个静默坑：`AutomationId` 写在 `Border` 这类没有默认 automation peer 的元素上，UIA 树里根本不会出现——`AutomationId` 自己不会创建 peer。
 
+## 人工交互验收：确认框、Explorer 拖放与恢复
+
+自动化工具无法操作高权限窗口或拒绝跨窗口释放鼠标时，保留真实交互这一验收项。准备独立数据目录、测试文件和目标 Explorer 窗口，关闭应用已有的 Shell 集成／自启动开关，确认夹具没有被单实例转发到用户正在使用的实例。给用户可辨认的窗口标题、路径特征、操作按钮和预期结果；交接后暂停输入，避免抢走焦点。
+
+先保存源文件与目标文件的内容摘要、必要的修改时间以及相关数据库业务行。用户回复完成后，再检查这些证据：
+
+- **应用确认框取消**：窗口关闭，日志记录取消及正常退出；目标内容与修改时间、相关业务行保持基线，没有执行成功记录。原始数据库文件摘要可能受 WAL 或连接收尾影响，应核对业务数据。
+- **Explorer 拖放**：至少包含两个同名文件和一个含子目录的文件夹，检查目标文件集合、两个同名内容均保留、目录层级及摘要；同时核对源文件未被移动。若产品承诺成功后移除暂存并隐藏空架，再检查数据库清理、成功历史和窗口行为。物化服务测试通过不能代替跨进程 OLE 拖放。
+- **空架隐藏**：用户观察、当前可见窗口列表及进程仍存活共同支持隐藏结论，不能把进程退出误当成自动隐藏。辅助功能文字可能滞后；本次 Explorer 树仍说空文件夹，但实时截图和磁盘文件都已有三项，应记录证据冲突。
+
+分别记录实际管理员令牌、应用自身的批准／取消、Windows 系统 UAC 提示是否出现。系统策略可能使 RunAs 直接提升；此时只能验证实际提升及应用确认流程，不能声称系统同意／拒绝提示通过，也不要为补验随意更改全机安全策略。固定夹具自动批准 Core API 的专项测试，同样不能代替应用确认框的真实交互。
+
+若应用本来就支持文件与数据库之间的中断恢复，用可停在提交边界的隔离 worker 覆盖提交前、提交后未记账、完成记账，以及相应撤销边界。终止真实进程后重启，重复恢复和撤销，检查最终文件内容、历史及未决标记。不要用正常抛异常或取消令牌代替进程强杀；强杀通过也不证明断电和硬件缓存丢失场景通过。只终止本次夹具进程，并保留不确定状态的证据。
+
 ## 间歇性问题：跑 N 轮记比分
 
 「有时候不灵」不能用单次复现判断。同一条路径跑 12 轮，每轮记录成功与否，最后报比分。A/B 两组必须**背靠背跑**，否则桌面状态变化会污染结果。
@@ -233,3 +248,35 @@ UIA 仍然是选控件、点按钮的好工具（`InvokePattern` / `SelectionIte
 所以真装的钩子要**不带任何闸门**（`holdMs=0`、手势闸门也不带）：它只当一条通道，不对真实输入动手。这些用例断言的是泵线程与拆卸流程，没有一条依赖闸门存在，所以去掉闸门不损覆盖率。
 
 再把这条钉成断言：读测试源码，要求「真被 `Install()` 的那个钩子」构造时没有闸门。否则它会被后来的人悄悄改回去，而 CI 上永远看不出来（无头会话装不上钩子）。
+
+## WPF 回归测试：STA、Application 与入口程序集资源
+
+需要实例化窗口的测试不能只在任意测试线程上 `new Window()`。在 STA 线程上建立宿主，并保持 Dispatcher 消息循环存活；通过它调度构造、交互和关闭。多个测试类共享同一个 `Application` fixture，同一 AppDomain 内不要为每个测试类重建 Application。临时线程退出后仍留下的 `Application.Current` 会指向已失效的 Dispatcher。
+
+若 XAML 在测试里报图标或字典资源找不到，而应用内正常，先检查相对 pack URI 的解析程序集。测试入口程序集与应用程序集不同；可使用明确的 `/Assembly;component/...` 引用，或在测试项目以相同资源路径链接已有资源。不要生成另一份图标掩盖路径问题，也不要为了加载资源启动完整生产 App 的自启、钩子与配置流程。
+
+测试编辑器要走真实保存路径，再把结果写到隔离文件并重读。复制、嵌套排序等变更同时验证结构关系和执行轨迹，单纯断言列表长度看不出父引用错位。共享模型被另一个入口修改时，还要检查已经构造的行 ViewModel 是否更新。
+
+宿主初始化异常可能记为运行错误，导致部分测试未执行，即使失败数为零也不能判绿。查看运行是否完整结束、错误与跳过原因，并在需要时用 TRX 确认执行数量。需要前台的真实发键检查抢不到前台时记录为跳过；窗口构造或离屏截图通过不能替代接收端验证。
+
+## 多语言资源：检查承诺完整翻译的语种
+
+从应用支持的语言列表取样本，逐一打开预期的 `.resx`。这样删掉整份翻译文件也会让测试失败。对承诺完整翻译的语言，用键集合的对称差同时检查缺键和多键。允许父级文化回退的地区变体按回退链验证。
+
+```csharp
+// resourceDir、supportedCultures 由项目提供；此处传入承诺独立完整翻译的 culture 名。
+static HashSet<string> ReadKeys(string path) =>
+    XDocument.Load(path).Root!.Elements("data")
+        .Select(entry => (string)entry.Attribute("name")!)
+        .ToHashSet(StringComparer.Ordinal);
+
+var neutral = ReadKeys(Path.Combine(resourceDir, "Strings.resx"));
+foreach (var culture in supportedCultures)
+{
+    var keys = ReadKeys(Path.Combine(resourceDir, $"Strings.{culture}.resx"));
+    keys.SymmetricExceptWith(neutral);
+    Assert.True(keys.Count == 0, $"{culture}: {string.Join(", ", keys)}");
+}
+```
+
+案例中的 18 语种另有已废弃术语表，可用它检查翻译值。使用项目实际维护的词表，并为用户可见错误消息与内部诊断分别约定用语。

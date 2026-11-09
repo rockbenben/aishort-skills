@@ -15,6 +15,8 @@
  * which skips every entry whose name starts with "." — file or directory — plus node_modules/,
  * and then drops anything whose extension is outside the text allowlist
  * (dist/schema/textFiles.js). A real file on disk can therefore be invisible to an install.
+ * These local checks model that inspected version. Publishing installs the current CLI,
+ * whose own validation remains authoritative if its bundle rules change.
  * ClawHub itself does not enforce metadata.openclaw.files: that field is not in its metadata schema
  * (dist/schema/schemas.js), the CLI never parses the frontmatter at all, and publish uploads
  * every text file the bundler collected regardless of it, so declaring a file neither lets it
@@ -39,7 +41,8 @@ import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, relative } from "node:path";
 
-const yaml = await import("js-yaml").then((m) => m.default ?? m).catch(() => {
+const { parseSkillMetadata, getSkillVersion } = await import("./skill-metadata.mjs").catch((error) => {
+  if (error.code !== "ERR_MODULE_NOT_FOUND" || !error.message.includes("'js-yaml'")) throw error;
   console.error("validate-skills: js-yaml is not installed.\n  npm install --no-save js-yaml@4");
   process.exit(2);
 });
@@ -109,7 +112,7 @@ const declaredFileExists = (dir, pattern) =>
 const versionAt = (ref, relPath) => {
   try {
     const src = execFileSync("git", ["show", `${ref}:${relPath}`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-    return src.match(/^version:\s*(.+)$/m)?.[1].trim() ?? null;
+    return getSkillVersion(parseSkillMetadata(src)) ?? null;
   } catch { return null; } // absent at that ref = a new skill, nothing to compare
 };
 
@@ -128,7 +131,7 @@ for (const dirent of readdirSync(SKILLS, { withFileTypes: true })) {
 
   let meta;
   try {
-    meta = yaml.load(fm[1]);
+    meta = parseSkillMetadata(raw);
   } catch (e) {
     // The failure this validator exists for.
     fail(skill, `frontmatter is not valid YAML (OpenClaw would drop metadata.openclaw): ${e.message.split("\n")[0]}`);
@@ -149,9 +152,10 @@ for (const dirent of readdirSync(SKILLS, { withFileTypes: true })) {
   else if (meta.description.length >= DESC_LIMIT)
     warn(skill, `description is ${meta.description.length} chars; list and search results truncate it at ${DESC_LIMIT} (the authoring guide aims for one line under ${DESC_SOFT_LIMIT}, but that is advisory)`);
 
-  // The publish workflow reads this line and passes it to `clawhub publish --version`.
-  if (typeof meta.version !== "string" || !SEMVER.test(meta.version))
-    fail(skill, `version must be valid semver, got ${JSON.stringify(meta.version)}`);
+  // Use the same version resolution as the publish workflow and historical comparison.
+  const version = getSkillVersion(meta);
+  if (typeof version !== "string" || !SEMVER.test(version))
+    fail(skill, `version must be valid semver, got ${JSON.stringify(version)}`);
 
   const bundled = bundleFiles(dir);
   const ships = new Set(bundled);
@@ -205,8 +209,8 @@ for (const dirent of readdirSync(SKILLS, { withFileTypes: true })) {
       fail(skill, `package.json is not valid JSON: ${e.message.split("\n")[0]}`);
     }
     if (pkg) {
-      if (pkg.version !== meta.version)
-        fail(skill, `package.json is ${pkg.version} while SKILL.md is ${meta.version}; one bump has to move both`);
+      if (pkg.version !== version)
+        fail(skill, `package.json is ${pkg.version} while SKILL.md is ${version}; one bump has to move both`);
       const lockPath = join(dir, "package-lock.json");
       if (existsSync(lockPath)) {
         const lock = JSON.parse(readFileSync(lockPath, "utf8"));
@@ -254,12 +258,12 @@ for (const dirent of readdirSync(SKILLS, { withFileTypes: true })) {
     }
     if (changed) {
       const before = versionAt(since, `${rel}/SKILL.md`);
-      if (before && before === meta.version)
-        fail(skill, `content changed since ${since} but version is still ${meta.version}; bump it or ClawHub refuses the release`);
+      if (before && before === version)
+        fail(skill, `content changed since ${since} but version is still ${version}; bump it or ClawHub refuses the release`);
     }
   }
 
-  if (failures === failedBefore) console.log(`  ok    ${skill}  v${meta.version}  desc ${meta.description.length}`);
+  if (failures === failedBefore) console.log(`  ok    ${skill}  v${version}  desc ${meta.description.length}`);
 }
 
 console.error(`\n${failures} failure(s), ${warnings} warning(s)`);

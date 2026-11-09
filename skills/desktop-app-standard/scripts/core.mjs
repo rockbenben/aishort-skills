@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+export const TOOL_VERSION = '0.9.1';
 export const exact = v => typeof v === 'string' && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(v) && v.split('.').every(n => Number.isSafeInteger(Number(n))) ? v : null;
 export function compare(a, b) {
   if (!exact(a) || !exact(b)) return null;
@@ -156,7 +157,8 @@ export function usageHints(files, body) {
 export async function requestJson(url, { token, fetchImpl = fetch, raw = false, allow404 = false } = {}) {
   const u = new URL(url);
   if (u.protocol !== 'https:' || !['api.github.com', 'registry.npmjs.org', 'crates.io', 'releases.electronjs.org', 'builds.dotnet.microsoft.com', 'raw.githubusercontent.com'].includes(u.hostname)) throw new Error('拒绝非白名单请求');
-  const headers = { 'User-Agent': 'desktop-app-standard/0.7.3', Accept: 'application/json' };
+  const headers = { 'User-Agent': `desktop-app-standard/${TOOL_VERSION}`, Accept: 'application/json' };
+  if (u.hostname === 'registry.npmjs.org') headers.Accept = 'application/vnd.npm.install-v1+json, application/json';
   // Never leak a GitHub token to npm, crates, release assets, or redirects.
   if (u.hostname === 'api.github.com') {
     headers.Accept = raw ? 'application/vnd.github.raw' : 'application/vnd.github+json';
@@ -301,6 +303,8 @@ export function macTargetsFromBuilder(text) {
     }
     if (!inMac) continue;
     if (indent <= macIndent) { inMac = false; inTarget = false; continue; }
+    const scalar = /^target:\s*['"]?([\w-]+)['"]?$/.exec(t);
+    if (scalar) { targets.push(scalar[1]); inTarget = false; continue; }
     const inline = /^target:\s*\[(.*)\]\s*$/.exec(t);
     if (inline) {
       targets.push(...inline[1].split(',').map(s => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean));
@@ -326,15 +330,15 @@ export function macTargetsFromBuilder(text) {
  */
 export function macTargetsFromArgs(text) {
   if (!text) return null;
-  const m = /--mac\b/.exec(text);
-  if (!m) return null;
-  const targets = [];
-  for (const tok of text.slice(m.index + m[0].length).trim().split(/\s+/)) {
-    if (!tok) continue;
-    if (tok.startsWith('-')) break;
-    targets.push(tok);
+  for (const match of text.matchAll(/(?:^|[\s'"])--mac\b([^\r\n'"]*)/gm)) {
+    const targets = [];
+    for (const token of match[1].trim().split(/\s+/)) {
+      if (!/^[\w][\w-]*$/.test(token)) break;
+      targets.push(token);
+    }
+    if (targets.length) return targets;
   }
-  return targets.length ? targets : null;
+  return null;
 }
 
 /** Resolve one manifest dependency against a parsed lockfile. Returns {version, locator, candidates}. */
@@ -344,7 +348,7 @@ export function resolveFromLock(kind, lock, { name, declared, importerPath }) {
     const hit = rows.find(e => e.range === declared || e.range === `npm:${declared}`);
     if (hit) return { version: hit.version, locator: `${name}@${hit.range}`, candidates: [hit.version] };
     const versions = [...new Set(rows.map(e => e.version))];
-    return { version: versions.length === 1 ? versions[0] : null, locator: versions.length === 1 ? `${name} (unique)` : null, candidates: versions };
+    return { version: null, locator: null, candidates: versions };
   }
   if (kind === 'pnpm') {
     const v = lock.importers[importerPath || '.']?.[name] ?? null;

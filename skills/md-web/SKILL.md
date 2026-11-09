@@ -1,6 +1,6 @@
 ---
 name: md-web
-version: 1.3.1
+version: 1.3.2
 description: Publish Markdown as a web page via the user's own S3 bucket, rendered by Docsify; returns a shareable link. It also provisions the viewer files at the bucket root (a separate --setup command) and can optionally auto-delete uploads after N days (expire_days), and it reads ~/.md-web/config.json for credentials. Use only when the user asks for a web page, online preview, published page or share link (做成网页 / 生成网页链接 / 分享为链接 / 发布到网上 / /md-web).
 
 metadata:

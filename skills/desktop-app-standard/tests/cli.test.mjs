@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { parseSkillMetadata, getSkillVersion } from '../../../scripts/skill-metadata.mjs';
 const base = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 function temp() { return fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-app-standard-test-')); }
 function write(root, file, data) { fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true }); fs.writeFileSync(path.join(root, file), typeof data === 'string' ? data : JSON.stringify(data)); }
@@ -51,6 +52,11 @@ test('documented platform deviation narrows coverage; undocumented one is report
   const root = temp(); try {
     write(root, 'package.json', { devDependencies: { electron: '^2.0.0' } });
     write(root, '.github/workflows/release.yml', 'on:\n  push:\n    tags: [v*]\njobs:\n  b:\n    runs-on: windows-latest\n    steps:\n      - run: yarn electron-builder --win nsis --publish never\n      - run: gh release upload v1 x\n');
+    const example = fs.readFileSync(path.join(base, 'templates/desktop-policy.example.json'), 'utf8');
+    write(root, '.desktop-policy.json', example);
+    const defaults = JSON.parse(run('audit.mjs', [root, '--offline', '--json']).stdout);
+    assert.ok(defaults.ciFindings.some(f => f.id === 'platform-coverage' && !f.accepted));
+    assert.equal(defaults.summary.ciAccepted, 0);
     write(root, '.desktop-policy.json', { deviations: [{ rule: 'platforms', value: ['windows-x64'], reason: 'pilot', revisitWhen: '2027-01-01' }] });
     let ids = JSON.parse(run('audit.mjs', [root, '--offline', '--json']).stdout).ciFindings.map(f => f.id);
     assert.equal(ids.includes('platform-coverage'), false);
@@ -278,17 +284,17 @@ test('Node toolchain pins are checked against the official schedule (EOL, mainte
 });
 test('online end-to-end with synthetic registry/release responses; since-baseline keeps inventory and CI', () => {
   const root = temp(); try {
-    write(root, 'package.json', { devDependencies: { electron: '^2.0.0' } });
-    write(root, 'package-lock.json', { packages: { 'node_modules/electron': { version: '2.0.0' } } });
+    write(root, 'package.json', { devDependencies: { electron: '^45.0.0' } });
+    write(root, 'package-lock.json', { packages: { 'node_modules/electron': { version: '45.0.0' } } });
     write(root, 'main.js', 'app.makeWindow()');
     write(root, '.github/workflows/release.yml', 'jobs:\n  build:\n    steps:\n      - uses: actions/checkout@v1\n      - uses: softprops/action-gh-release@v1\n      - uses: dtolnay/rust-toolchain@stable\n');
     const mock = path.join(root, 'mock.mjs');
     write(root, 'mock.mjs', `globalThis.fetch = async (u) => {
       let data;
-      if (u.includes('registry.npmjs.org')) data = { version: '2.1.0', engines: { node: '>=22' } };
-      else if (u.includes('releases.electronjs.org')) data = [{ version:'2.0.0' }, { version:'2.1.0' }];
+      if (u.includes('registry.npmjs.org')) data = { 'dist-tags': { latest: '46.0.0' }, versions: { '45.0.0': {}, '45.1.0': {}, '46.0.0': {} } };
+      else if (u.includes('releases.electronjs.org')) data = [{ version:'45.0.0' }, { version:'45.1.0' }, { version:'46.0.0' }];
       else if (u.includes('/releases/latest')) data = { tag_name: 'v4.0.0' };
-      else if (u.includes('/releases?')) data = [{ tag_name:'v2.1.0', prerelease:false, draft:false, body:'## Features\\n- New \\x60app.makeWindow\\x60 feature', html_url:'https://github.com/electron/electron/releases/tag/v2.1.0' }];
+      else if (u.includes('/releases?')) data = [{ tag_name:'v45.1.0', prerelease:false, draft:false, body:'## Features\\n- New \\x60app.makeWindow\\x60 feature', html_url:'https://github.com/electron/electron/releases/tag/v45.1.0' }];
       else if (u.includes('/tags?')) data = [{ name:'v4.0.0', commit:{sha:'b'.repeat(40)} }, { name:'v1', commit:{sha:'a'.repeat(40)} }];
       else throw Error('Unexpected test URL');
       return {ok:true, status:200, json:async()=>data};
@@ -311,11 +317,13 @@ test('online end-to-end with synthetic registry/release responses; since-baselin
     assert.ok(String(moving[0].detail).includes('softprops/action-gh-release'));
     // 只读 Action 的大版本标签不该触发“SHA 未在 tag 中找到”的警告（0.5.0 的回归）
     assert.equal(data.warnings.some(w => /SHA/.test(w)), false, data.warnings.join('\n'));
-    assert.equal(data.toolVersion, '0.7.3');
+    const skillVersion = getSkillVersion(parseSkillMetadata(fs.readFileSync(path.join(base, 'SKILL.md'), 'utf8')));
+    assert.equal(data.toolVersion, skillVersion);
     const review = path.join(root, 'review.json'); assert.equal(run('review-baseline.mjs', [audit, review, '--confirm-reviewed']).status, 0);
     r = spawnSync(process.execPath, ['--import', pathToFileURL(mock).href, path.join(base, 'scripts/audit.mjs'), root, '--json', '--since-baseline', review], { encoding: 'utf8' });
     assert.equal(r.status, 0, r.stderr); data = JSON.parse(r.stdout);
     assert.equal(data.changes[0].reviewed, true); assert.ok(data.inventory.length); assert.ok(data.ciFindings.length);
+    assert.ok(data.changes[0].hits.every(hit => hit.file !== 'snapshot.json'));
   } finally { fs.rmSync(root, { recursive: true }); }
 });
 
@@ -491,5 +499,108 @@ test('CLI usage errors print one line, not a stack', () => {
       assert.match(r.stderr, /^desktop-app-standard: /m);
       assert.doesNotMatch(r.stderr, /\n\s+at /);
     }
+  } finally { fs.rmSync(root, { recursive: true }); }
+});
+
+test('skill major selects the newest published stable target even after upstream moves to the next major', () => {
+  const root = temp();
+  try {
+    write(root, 'package.json', { devDependencies: { 'electron-builder': '26.18.0' }, dependencies: { 'electron-updater': '6.8.9' } });
+    write(root, 'package-lock.json', { packages: {
+      'node_modules/electron-builder': { version: '26.18.0' },
+      'node_modules/electron-updater': { version: '6.8.9' },
+    } });
+    const mock = path.join(root, 'registry.mjs');
+    write(root, 'registry.mjs', `globalThis.fetch = async url => {
+      const data = {
+        'https://registry.npmjs.org/electron-builder': { 'dist-tags': { latest: '27.0.0' }, versions: { '26.18.0': {}, '26.18.1': {}, '26.18.2': { deprecated: 'withdrawn' }, '27.0.0': {} } },
+        'https://registry.npmjs.org/electron-updater': { 'dist-tags': { latest: '7.0.0', next: '6.8.20' }, versions: { '6.8.9': {}, '6.8.10': {}, '6.8.20': {}, '6.8.12-beta.1': {}, '7.0.0': {} } },
+      }[url];
+      if (data) return { ok: true, json: async () => data };
+      if (url.startsWith('https://api.github.com/repos/electron-userland/electron-builder/releases?')) return { ok: true, json: async () => [] };
+      throw new Error('unexpected request ' + url);
+    };`);
+    const r = spawnSync(process.execPath, ['--import', pathToFileURL(mock).href,
+      path.join(base, 'scripts/audit.mjs'), root, '--json'], { encoding: 'utf8' });
+    const out = JSON.parse(r.stdout);
+    assert.equal(r.status, 0, JSON.stringify(out.errors));
+    const versions = out.upstream.map(p => [p.name, p.latestStable, p.targetMajor, p.targetStable]).sort();
+    assert.deepEqual(versions, [['electron-builder', '27.0.0', 26, '26.18.1'], ['electron-updater', '7.0.0', 6, '6.8.10']]);
+  } finally { fs.rmSync(root, { recursive: true }); }
+});
+
+test('Tauri major selection excludes yanked crates and reports an unavailable target without substituting a newer major', () => {
+  const root = temp();
+  try {
+    write(root, 'Cargo.lock', 'version = 3\n[[package]]\nname = "tauri-build"\nversion = "1.0.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n');
+    write(root, 'package.json', { devDependencies: { '@tauri-apps/cli': '1.0.0' } });
+    write(root, 'package-lock.json', { packages: { 'node_modules/@tauri-apps/cli': { version: '1.0.0' } } });
+    const mock = path.join(root, 'registry.mjs');
+    write(root, 'registry.mjs', `globalThis.fetch = async url => {
+      const data = {
+        'https://registry.npmjs.org/%40tauri-apps%2Fcli': { 'dist-tags': { latest: '3.0.0' }, versions: { '3.0.0': {}, '2.1.0-rc.1': {} } },
+        'https://crates.io/api/v1/crates/tauri-build': { versions: [{num:'3.0.0'}, {num:'2.10.0',yanked:true}, {num:'2.9.2'}] },
+      }[url];
+      if (!data) throw new Error('unexpected request ' + url);
+      return { ok: true, json: async () => data };
+    };`);
+    const r = spawnSync(process.execPath, ['--import', pathToFileURL(mock).href,
+      path.join(base, 'scripts/audit.mjs'), root, '--json'], { encoding: 'utf8' });
+    const out = JSON.parse(r.stdout);
+    assert.equal(r.status, 2);
+    assert.deepEqual(out.errors, []);
+    assert.equal(out.upstream.find(p => p.name === 'tauri-build').targetStable, '2.9.2');
+    assert.equal(out.upstream.find(p => p.name === '@tauri-apps/cli').targetStable, null);
+    assert.ok(out.warnings.some(message => message.includes('@tauri-apps/cli') && message.includes('2.x')));
+  } finally { fs.rmSync(root, { recursive: true }); }
+});
+
+test('specialized modes keep CI context without collecting unrelated framework releases', () => {
+  const root = temp();
+  try {
+    write(root, 'ui/package.json', {
+      dependencies: { electron: '^1.0.0', 'electron-updater': '^1.0.0' },
+      build: { mac: { target: [{ target: 'dmg' }] } },
+    });
+    write(root, 'App.csproj', '<Project><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>');
+    const mock = path.join(root, 'metadata.mjs');
+    write(root, 'metadata.mjs', [
+      'globalThis.fetch = async url => {',
+      "  if (!url.endsWith('/10.0/releases.json')) throw new Error('unexpected request ' + url);",
+      "  return { ok: true, json: async () => ({ 'latest-sdk': '10.0.100', 'support-phase': 'active', 'eol-date': '2099-01-01' }) };",
+      '};',
+    ].join('\n'));
+    for (const mode of ['--ci-only', '--dotnet']) {
+      const r = spawnSync(process.execPath, ['--import', pathToFileURL(mock).href,
+        path.join(base, 'scripts/audit.mjs'), root, mode, '--json'], { encoding: 'utf8' });
+      const out = JSON.parse(r.stdout);
+      assert.equal(r.status, 0, JSON.stringify(out.errors));
+      assert.deepEqual(out.upstream, []);
+      assert.ok(out.ciFindings.some(f => f.file === 'ui/package.json' && f.id === 'mac-update-needs-zip'));
+      if (mode === '--dotnet') assert.equal(out.dotnet.channels[0].latestSdk, '10.0.100');
+    }
+  } finally { fs.rmSync(root, { recursive: true }); }
+});
+
+test('explicit MSBuild expressions keep their uncertainty over inherited defaults', () => {
+  const root = temp();
+  try {
+    write(root, 'Directory.Build.props', '<Project><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>');
+    write(root, 'App.csproj', '<Project><PropertyGroup><TargetFramework>$(AppTfm)</TargetFramework></PropertyGroup></Project>');
+    const r = run('audit.mjs', [root, '--dotnet', '--json']);
+    const out = JSON.parse(r.stdout);
+    assert.equal(r.status, 2);
+    assert.deepEqual(out.dotnet.projects[0].unresolved, ['$(AppTfm)']);
+    assert.deepEqual(out.dotnet.channels, []);
+  } finally { fs.rmSync(root, { recursive: true }); }
+});
+
+test('a failed checksum run emits no partial manifest', () => {
+  const root = temp();
+  try {
+    write(root, 'a.zip', 'valid first asset');
+    const r = run('checksums.mjs', [path.join(root, 'a.zip'), path.join(root, 'z.zip')]);
+    assert.notEqual(r.status, 0);
+    assert.equal(r.stdout, '');
   } finally { fs.rmSync(root, { recursive: true }); }
 });

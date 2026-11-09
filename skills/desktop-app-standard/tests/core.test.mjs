@@ -237,7 +237,8 @@ test('release-tauri template resolves API asset URLs as well as direct URLs', as
   const fs = await import('node:fs'); const path = await import('node:path'); const { fileURLToPath } = await import('node:url');
   const t = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../templates/workflows/release-tauri.yml'), 'utf8');
   assert.match(t, /api\.github\.com\/repos\//, 'template lost the API asset URL branch');
-  assert.match(t, /gh api "repos\/\$REPO\/releases\/assets\/\$asset_id"/, 'template does not resolve API asset id to its name');
+  assert.ok(t.includes('releases/$DRAFT_ID/assets?') && t.includes('select(.id == $id) | .name'),
+    'API asset IDs must resolve within the current draft');
   const bs = String.fromCharCode(92);
   assert.ok(t.includes('basename ' + '"${url%%' + bs + '?*}"'), 'template lost the direct download URL branch');
 });
@@ -248,4 +249,12 @@ test('every trap has a unique id and P0/P1/P2 severity', () => {
   return import('node:fs').then(fs => { const doc = fs.readFileSync(new URL('../references/ci-traps.md', import.meta.url), 'utf8');
     for (const id of ids) assert.ok(doc.includes('`' + id + '`'), `ci-traps.md is missing ${id}`);
     assert.equal(/\$\{(c|m)\.|\| 未知 \|/.test(doc), false, 'ci-traps.md contains unrendered template text'); });
+});
+
+
+test('Yarn does not resolve an unmatched declaration from a unique candidate', () => {
+  const lock = parseYarnLock('electron@^40.0.0:\n  version "40.0.1"');
+  const resolved = resolveFromLock('yarn', lock, { name: 'electron', declared: '^41.0.0' });
+  assert.equal(resolved.version, null);
+  assert.deepEqual(resolved.candidates, ['40.0.1']);
 });

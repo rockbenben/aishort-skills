@@ -59,10 +59,14 @@
   // Later navigations (a link inside a document, a hand-edited hash) go through
   // the same check. This listener is registered first because config.js loads
   // first, so it runs before docsify's own hashchange handler starts the fetch.
+  var indexedRoute = location.hash.replace(/^#/, "").split("?")[0] || "/";
   window.addEventListener("hashchange", function () {
     if (!isDocRoute(location.hash)) {
       location.replace(landingUrl());
+      return;
     }
+    var nextRoute = location.hash.replace(/^#/, "").split("?")[0] || "/";
+    if (nextRoute !== indexedRoute) location.reload();
   });
 
   window.$docsify = {

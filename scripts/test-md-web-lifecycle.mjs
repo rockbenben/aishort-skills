@@ -48,7 +48,7 @@ const OUR_RULE = (days) =>
   `<Rule><ID>md-web-auto-expire</ID><Filter><Prefix>md-web/</Prefix></Filter><Status>Enabled</Status><Expiration><Days>${days}</Days></Expiration></Rule>`;
 
 /** Run upload.js --setup against a scripted S3 and return every request it made. */
-function runSetup(config, s3, waitMs = 250) {
+async function runSetup(config, s3) {
   const home = mkdtempSync(join(tmpdir(), "md-web-test-"));
   try {
     mkdirSync(join(home, ".md-web"));
@@ -67,7 +67,7 @@ function runSetup(config, s3, waitMs = 250) {
           end(payload) {
             if (payload) call.body = Buffer.from(payload).toString("utf-8");
             const res = s3(call);
-            const rs = { statusCode: res.status };
+            const rs = { statusCode: res.status, headers: res.headers || {} };
             rs.on = (ev, fn) => { rs[ev] = fn; return rs; };
             callback(rs);
             setTimeout(() => { rs.data?.(Buffer.from(res.body ?? "", "utf-8")); rs.end?.(); }, 0);
@@ -92,12 +92,12 @@ function runSetup(config, s3, waitMs = 250) {
       console: { log: (...a) => out.push(a.join(" ")), error: (...a) => out.push(a.join(" ")) },
       Buffer, Promise, Date, setTimeout, encodeURIComponent, isFinite,
     };
+    sandbox.require.main = sandbox.module;
     sandbox.globalThis = sandbox;
     createContext(sandbox);
     runInContext(readFileSync(UPLOAD_JS, "utf8"), sandbox, { filename: UPLOAD_JS });
-    // The script is promise-driven; let the microtask/timer chain drain before the
-    // temp config dir disappears under it.
-    return new Promise((resolveRun) => setTimeout(() => resolveRun({ calls, out }), waitMs));
+    await sandbox.completion;
+    return { calls, out };
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -218,12 +218,11 @@ const okPut = (call) => ({ status: 200, body: "" });
   else pass("a denied lifecycle read is reported and never followed by a write");
 }
 
-// ── A nonsense expire_days must not be coerced into a bucket-wide change ──
-{
-  const { calls } = await runSetup({ ...baseConfig, expire_days: "forever" }, (call) =>
-    call.path.includes("?lifecycle") ? { status: 200, body: xml([USER_RULE]) } : okPut(call));
-  if (lifecycleOf(calls).length) fail("expire_days: \"forever\" still sent lifecycle requests");
-  else pass('expire_days: "forever" → warned about, bucket left alone');
+// Invalid retention values must be rejected before any object or bucket writes.
+for (const expire_days of ["forever", 0.5, false, " ", -1, "1.5"]) {
+  const { calls, out } = await runSetup({ ...baseConfig, expire_days }, okPut);
+  if (calls.length || !out.some(line => line.includes("CONFIG_INVALID")))
+    fail("invalid expire_days was not rejected before writes: " + JSON.stringify(expire_days));
 }
 
 // ── Transient failures are retried; a 4xx is final ──
@@ -232,7 +231,7 @@ const okPut = (call) => ({ status: 200, body: "" });
   const run = await runSetup({ ...baseConfig }, (call) => {
     if (!first) { first = { method: call.method, path: call.path }; return { status: 500, body: "<Error><Code>InternalError</Code></Error>" }; }
     return okPut(call);
-  }, 2500);
+  });
   const tries = run.calls.filter((c) => c.method === first.method && c.path === first.path).length;
   if (tries !== 2) fail(`a 500 was not retried exactly once (${tries} attempts)${why(run)}`);
   else if (!run.out.some((l) => l.includes("retry 1/2"))) fail(`no retry note in the output${why(run)}`);
@@ -251,7 +250,7 @@ const okPut = (call) => ({ status: 200, body: "" });
 
 // ── The retry budget is finite, and a give-up is loud ──
 {
-  const run = await runSetup({ ...baseConfig }, () => ({ status: 500, body: "<Error><Code>InternalError</Code></Error>" }), 8000);
+  const run = await runSetup({ ...baseConfig }, () => ({ status: 500, body: "<Error><Code>InternalError</Code></Error>" }));
   // The budget is per request: every upload is tried once and then retried twice.
   const byPath = new Map();
   for (const c of run.calls) byPath.set(c.path, (byPath.get(c.path) || 0) + 1);
@@ -268,7 +267,7 @@ const okPut = (call) => ({ status: 200, body: "" });
   const run = await runSetup({ ...baseConfig }, (call) => {
     if (first) { first = false; return { status: 429, body: "" }; }
     return okPut(call);
-  }, 2500);
+  });
   if (run.calls.length < 2) fail(`a 429 was not retried (${run.calls.length} attempts)${why(run)}`);
   else pass("429 is transient and is retried");
 }
@@ -297,40 +296,18 @@ const okPut = (call) => ({ status: 200, body: "" });
   else pass("an explicit :443 endpoint is sent as the Host header it signs");
 }
 
-// ── Top-level lifecycle settings survive the read-modify-write ──
-{
-  const existing = xml([
-    "<TransitionDefaultMinimumObjectSize>all_storage_classes_128K</TransitionDefaultMinimumObjectSize>",
-    USER_RULE,
-  ]);
-  const run = await runSetup({ ...baseConfig, expire_days: 30 }, (call) =>
-    call.method === "GET" ? { status: 200, body: existing } : okPut(call));
-  const put = lifecycleOf(run.calls).find((c) => c.method === "PUT");
-  if (!put) fail(`no lifecycle PUT${why(run)}`);
-  else if (!put.body.includes("TransitionDefaultMinimumObjectSize"))
-    fail(`a top-level lifecycle setting was dropped: ${put.body}${why(run)}`);
-  else if (!put.body.includes("keep-my-backups"))
-    fail(`the user's own rule was dropped: ${put.body}${why(run)}`);
-  else pass("top-level lifecycle settings are preserved alongside the rules");
+// AWS exposes its bucket-wide transition default in an HTTP header.
+for (const value of ["varies_by_storage_class", "all_storage_classes_128K"]) {
+  for (const days of [0, 30]) {
+    const run = await runSetup({ ...baseConfig, expire_days: days }, call =>
+      call.method === "GET" ? { status: 200, body: xml([USER_RULE, OUR_RULE(7)]),
+        headers: { "x-amz-transition-default-minimum-object-size": value } } : okPut(call));
+    const put = lifecycleOf(run.calls).find(call => call.method === "PUT");
+    if (put?.headers["x-amz-transition-default-minimum-object-size"] !== value || !put.body.includes(USER_RULE))
+      fail("AWS lifecycle transition header or unrelated rule was lost");
+    else pass("AWS lifecycle header preserved for expire_days " + days + ": " + value);
+  }
 }
 
-// ── Removing our rule must not DELETE top-level settings that are not rules ──
-{
-  const existing = xml([
-    OUR_RULE(30),
-    "<TransitionDefaultMinimumObjectSize>all_storage_classes_128K</TransitionDefaultMinimumObjectSize>",
-  ]);
-  const run = await runSetup({ ...baseConfig, expire_days: 0 }, (call) =>
-    call.method === "GET" ? { status: 200, body: existing } : okPut(call));
-  const writes = lifecycleOf(run.calls).filter((c) => c.method !== "GET");
-  if (writes.length !== 1 || writes[0].method !== "PUT")
-    fail(`expire_days 0 did not rewrite a config that holds other settings: ${JSON.stringify(writes.map((c) => c.method))}${why(run)}`);
-  else if (!writes[0].body.includes("TransitionDefaultMinimumObjectSize"))
-    fail(`a top-level lifecycle setting was deleted: ${writes[0].body}${why(run)}`);
-  else if (writes[0].body.includes("md-web-auto-expire"))
-    fail(`our rule was not removed: ${writes[0].body}${why(run)}`);
-  else pass("expire_days 0 keeps top-level lifecycle settings instead of deleting the document");
-}
-
-console.error(`\n${failures} failure(s)`);
+console.log(`\n${failures} failure(s)`);
 process.exit(failures ? 1 : 0);

@@ -63,38 +63,50 @@ const findingsOf = (html) => {
 };
 
 for (const slug of slugs) {
-  const scanRes = await fetch(`${REGISTRY}/api/v1/skills/${slug}/scan`).catch(() => null);
-  const scan = scanRes?.ok ? await scanRes.json() : null;
-  const version = scan?.version?.version ?? "(none published)";
-  const ss = scan?.security?.scanners?.skillspector;
-  const llm = scan?.security?.scanners?.llm;
+  try {
+    const scanRes = await fetch(`${REGISTRY}/api/v1/skills/${slug}/scan`, { signal: AbortSignal.timeout(30000) });
+    if (scanRes.status === 404) {
+      console.log(`\n=== ${slug} ===\n  no published scan available (HTTP 404)`);
+      continue;
+    }
+    if (!scanRes.ok) throw new Error(`scan summary HTTP ${scanRes.status}`);
+    const scan = await scanRes.json();
+    if (!scan || typeof scan !== "object" || !scan.security) throw new Error("scan summary has an unknown format");
+    const version = scan?.version?.version ?? "(none published)";
+    const ss = scan?.security?.scanners?.skillspector;
+    const llm = scan?.security?.scanners?.llm;
 
-  console.log(`\n=== ${slug} @ ${version} ===`);
-  if (!scan) {
-    console.log("  (not published yet — no scan to read)");
-    continue;
-  }
-  console.log(
-    `  skillspector: ${ss?.status ?? "?"} score=${ss?.score ?? "?"} severity=${ss?.severity ?? "?"} issues=${ss?.issueCount ?? 0}`,
-  );
-  console.log(
-    `  llm: ${llm?.normalizedStatus ?? "?"} verdict=${llm?.verdict ?? "?"} confidence=${llm?.confidence ?? "?"}`,
-  );
-  if (llm?.guidance) console.log(`  llm guidance: ${llm.guidance}`);
-  for (const d of llm?.dimensions ?? []) {
-    if (d.rating !== "ok") console.log(`    - [${d.rating}] ${d.label}: ${d.detail}`);
-  }
+    console.log(`\n=== ${slug} @ ${version} ===`);
+    console.log(
+      `  skillspector: ${ss?.status ?? "?"} score=${ss?.score ?? "?"} severity=${ss?.severity ?? "?"} issues=${ss?.issueCount ?? 0}`,
+    );
+    console.log(
+      `  llm: ${llm?.normalizedStatus ?? "?"} verdict=${llm?.verdict ?? "?"} confidence=${llm?.confidence ?? "?"}`,
+    );
+    if (llm?.guidance) console.log(`  llm guidance: ${llm.guidance}`);
+    for (const d of llm?.dimensions ?? []) {
+      if (d.rating !== "ok") console.log(`    - [${d.rating}] ${d.label}: ${d.detail}`);
+    }
 
-  const html = await (await fetch(`${REGISTRY}/${OWNER}/skills/${slug}/security-audit`)).text();
-  const findings = findingsOf(html);
-  if (!findings.length) {
-    console.log("  findings: none");
-    continue;
-  }
-  for (const f of findings) {
-    console.log(`  - ${f.title} [${f.severity}] ${f.category} (${f.confidence})`);
-    console.log(`      ${f.file} line ${f.line}`);
-    console.log(`      ${f.description}`);
-    if (VERBOSE) console.log(`      excerpt: ${f.excerpt.slice(0, 400)}`);
+    const details = await fetch(`${REGISTRY}/${OWNER}/skills/${slug}/security-audit`, { signal: AbortSignal.timeout(30000) });
+    if (!details.ok) throw new Error(`scan details HTTP ${details.status}`);
+    const html = await details.text();
+    const findings = findingsOf(html);
+    if (findings.length < (ss?.issueCount ?? 0)) throw new Error("scan details incomplete: fewer findings than the summary");
+    if (!findings.length) {
+      // Only a completed scanner with zero reported issues establishes an empty result.
+      if (ss?.issueCount !== 0 || /pending|running|error|failed/i.test(ss?.status || "unknown")) throw new Error("scan details unavailable or scanner incomplete");
+      console.log("  findings: none");
+      continue;
+    }
+    for (const f of findings) {
+      console.log(`  - ${f.title} [${f.severity}] ${f.category} (${f.confidence})`);
+      console.log(`      ${f.file} line ${f.line}`);
+      console.log(`      ${f.description}`);
+      if (VERBOSE) console.log(`      excerpt: ${f.excerpt.slice(0, 400)}`);
+    }
+  } catch (error) {
+    console.error(`  ${slug}: scan incomplete — ${error.message}`);
+    process.exitCode = 2;
   }
 }

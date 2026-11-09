@@ -19,7 +19,7 @@ on:
     tags: ['v*']
   workflow_dispatch:
     inputs:
-      tag: { description: 'Existing tag to rebuild, e.g. v1.2.3', required: true }
+      tag: { description: 'Existing tag to rebuild. Dispatch on that tag ref, e.g. v1.2.3', required: true }
 permissions:
   contents: read
 concurrency:
@@ -33,9 +33,10 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
     steps:
       - uses: actions/checkout@v7
-        with: { ref: '${{ env.TAG }}' }
+        with: { ref: 'refs/tags/${{ env.TAG }}' }
       - id: version
         name: Tag is the single version source
         shell: bash
@@ -43,12 +44,31 @@ jobs:
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::$TAG is not vX.Y.Z"; exit 1; }
           v="${TAG#v}"; pkg=$(node -p "require('./package.json').version")
           [ "$pkg" = "$v" ] || { echo "::error::version mismatch: package.json $pkg != tag $v"; exit 1; }
+          commit=$(git rev-parse HEAD)
+          event_commit=$(git rev-parse --verify "$GITHUB_SHA^{commit}") || { echo "::error::Dispatch this workflow on the target tag ref"; exit 1; }
+          [[ "$commit" == "$event_commit" ]] || { echo "::error::Tag and workflow event point to different commits"; exit 1; }
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "version=$v" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v7
         with: { node-version: 26, cache: npm }
       - run: npm ci                     # Yarn 1: yarn install --frozen-lockfile · Yarn 4: corepack enable + yarn install --immutable
+      - name: Verify installed Electron release majors
+        run: |
+          npm ls --depth=0 --json > "$RUNNER_TEMP/npm-tree.json"
+          node <<'NODE'
+          const { dependencies } = require(process.env.RUNNER_TEMP + '/npm-tree.json');
+          const targets = require('./.github/desktop-version-targets.json').npm;
+          for (const name of ['electron', 'electron-builder', 'electron-updater']) {
+            const major = targets[name];
+            const version = dependencies?.[name]?.version;
+            if (!/^\d+\.\d+\.\d+$/.test(version) || Number(version.split('.')[0]) !== major) {
+              throw new Error(name + ': expected stable ' + major + '.x, installed ' + version);
+            }
+            console.log(name, version);
+          }
+          NODE
       - run: npx install-electron       # Electron >= 42: no postinstall download any more (yarn: yarn run install-electron)
-      - run: npm run lint && npm test
+      - run: npm run lint && npm run typecheck && npm test
 
   build:
     needs: validate
@@ -62,7 +82,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-        with: { ref: '${{ env.TAG }}' }
+        with: { ref: '${{ needs.validate.outputs.commit }}' }
       - uses: actions/setup-node@v7
         with: { node-version: 26, cache: npm }
       - run: npm ci
@@ -85,16 +105,16 @@ jobs:
           # actually present. No credentials = an explicitly UNSIGNED build.
           #
           # macOS Developer ID + notarization (electron-builder ≥ 27 reads mac signing from mac.sign; VERIFY on upgrade)
-          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          MAC_CSC_IDENTITY: ${{ secrets.MAC_CSC_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MAC_CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || '' }}
+          MAC_CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          MAC_CSC_IDENTITY: ${{ runner.os == 'macOS' && secrets.MAC_CSC_IDENTITY || '' }}
+          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
           # Windows: Azure Artifact Signing via win.azureSignOptions in electron-builder config
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ runner.os == 'Windows' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ runner.os == 'Windows' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ runner.os == 'Windows' && secrets.AZURE_CLIENT_SECRET || '' }}
         run: |
           set -euo pipefail
           # Don't scan the keychain: on CI the signing identity must come from
@@ -129,6 +149,11 @@ jobs:
 
   publish:
     needs: [validate, build]
+    concurrency:
+      group: desktop-release-promotion
+      queue: max
+    outputs:
+      latest: ${{ steps.promote.outputs.latest }}
     runs-on: ubuntu-latest
     environment: release                 # required reviewers = human approval gate
     permissions:
@@ -140,9 +165,25 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       VERSION: ${{ needs.validate.outputs.version }}
+      COMMIT: ${{ needs.validate.outputs.commit }}
     steps:
       - uses: actions/download-artifact@v8
-        with: { pattern: 'dist-*', merge-multiple: true, path: dist }
+        with: { pattern: 'dist-*', path: staging }
+      - name: Collect the three builds without overwriting assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir dist
+          for os in win mac linux; do
+            files=(staging/dist-"$os"/*)
+            (( ${#files[@]} )) || { echo "::error::Missing artifacts for $os"; exit 1; }
+            for file in "${files[@]}"; do
+              name=${file##*/}
+              [[ -f "$file" && ! -e "dist/$name" ]] || { echo "::error::Unexpected or duplicate asset: $name"; exit 1; }
+              mv -- "$file" "dist/$name"
+            done
+          done
       # electron-builder renames assets when IT uploads them: GitHub only allows
       # [0-9A-Za-z._-] in asset names, so "my-app Setup 1.0.0.exe" is uploaded as
       # "my-app-Setup-1.0.0.exe" — and the updater manifest's url is rewritten to
@@ -159,43 +200,56 @@ jobs:
           cd dist
           for f in *; do
             if [ -f "$f" ] && [[ "$f" == *" "* ]]; then
-              mv -- "$f" "${f// /-}"
+              dest="${f// /-}"
+              [ ! -e "$dest" ] || { echo "::error::asset rename collision: $dest"; exit 1; }
+              mv -- "$f" "$dest"
             fi
           done
       - name: Verify every updater manifest and the files it points to
         run: |
           set -euo pipefail
           cd dist
+          shopt -s nullglob
+          # The template builds x64 + arm64. electron-builder may omit the x64 suffix.
+          verify_arches() {
+            local expected=$1 name arch x64=0 arm64=0
+            shift
+            for name in "$@"; do
+              if [[ "$name" =~ (^|[._-])(aarch64|arm64)([._-]|$) ]]; then arch=arm64
+              elif [[ "$name" =~ (^|[._-])(x86_64|x64|amd64)([._-]|$) ]]; then arch=x64
+              elif [[ "$name" =~ (^|[._-])(ia32|x86|i[3-6]86|arm|armhf|armv[5-8][a-z]*|universal)([._-]|$) ]]; then
+                echo "::error::unexpected architecture in $name"; return 1
+              else arch=x64
+              fi
+              if [[ "$arch" == arm64 ]]; then arm64=1; else x64=1; fi
+            done
+            case "$expected:$x64:$arm64" in both:1:1|x64:1:0|arm64:0:1) return 0;; esac
+            echo "::error::expected $expected, found: $*"; return 1
+          }
           for m in latest.yml latest-mac.yml latest-linux.yml latest-linux-arm64.yml; do
-            [ -f "$m" ] || { echo "::error::missing $m"; exit 1; }
-            grep -q "^version: $VERSION$" "$m" || { echo "::error::$m is not version $VERSION"; exit 1; }
-            while read -r u; do
-              [ -f "$u" ] || { echo "::error::$m references missing $u"; exit 1; }
-            done < <(grep -E '^\s*-?\s*url:' "$m" | awk '{print $NF}')
+            # yq v4 and jq are available on the hosted Ubuntu publish runner.
+            yq -o=json '.' "$m" > "$RUNNER_TEMP/feed.json"
+            jq -e --arg v "$VERSION" '.version == $v and (.files | type == "array" and length > 0)' "$RUNNER_TEMP/feed.json" >/dev/null
+            jq -er '.files[] | [.url, .sha512] | @tsv' "$RUNNER_TEMP/feed.json" > "$RUNNER_TEMP/feed.tsv"
+            carriers=()
+            while IFS=$'\t' read -r name digest; do
+              [[ -n "$name" && "$name" != */* && -f "$name" && -n "$digest" ]] || { echo "::error::$m invalid asset: $name"; exit 1; }
+              actual=$(openssl dgst -sha512 -binary < "$name" | openssl base64 -A)
+              [[ "$actual" == "$digest" ]] || { echo "::error::$m SHA512 mismatch: $name"; exit 1; }
+              case "$m/$name" in
+                latest.yml/*[Ss]etup*.exe|latest-mac.yml/*.zip|latest-linux*.yml/*.AppImage) carriers+=("$name");;
+              esac
+            done < "$RUNNER_TEMP/feed.tsv"
+            (( ${#carriers[@]} )) || { echo "::error::$m has no updatable artifact"; exit 1; }
+            case "$m" in
+              latest-mac.yml) verify_arches both "${carriers[@]}";;
+              latest-linux-arm64.yml) verify_arches arm64 "${carriers[@]}";;
+              latest-linux.yml) verify_arches x64 "${carriers[@]}";;
+            esac
           done
-      - name: Manifests must point at an updatable artifact
-        run: |
-          set -euo pipefail
-          cd dist
-          # macOS: electron-updater's MacUpdater only accepts a zip. A dmg-only
-          # build makes the manifest point at a .dmg, and the updater then throws
-          # ERR_UPDATER_ZIP_FILE_NOT_FOUND — the in-app update check fails on
-          # every Mac. ("pkg"/"dmg" in findFile() are an EXCLUSION list, not a
-          # fallback, so a dmg never satisfies the zip lookup.)
-          if ! grep -E '^\s*-?\s*url:' latest-mac.yml | grep -qi '\.zip$'; then
-            echo "::error::latest-mac.yml does not point at a zip; macOS in-app update fails"
-            exit 1
-          fi
-          # Windows: only the NSIS installer can replace itself.
-          if ! grep -E '^\s*-?\s*url:' latest.yml | grep -qi 'setup.*\.exe$'; then
-            echo "::error::latest.yml does not point at the NSIS installer"
-            exit 1
-          fi
-          # Linux: only AppImage updates itself (deb/rpm are install channels).
-          if ! grep -E '^\s*-?\s*url:' latest-linux.yml | grep -qi '\.appimage$'; then
-            echo "::error::latest-linux.yml does not point at an AppImage"
-            exit 1
-          fi
+          for ext in dmg deb rpm; do
+            verify_arches both *."$ext"
+          done
       - name: SHA256SUMS (LF, generated on Linux)
         # `find -print0` instead of `sha256sum -- *`: the glob would include
         # SHA256SUMS itself on a re-run (it exists by then), producing a
@@ -209,27 +263,55 @@ jobs:
       - uses: actions/attest@v4
         with: { subject-checksums: dist/SHA256SUMS }
       - name: Create or reuse the draft, upload everything
+        id: draft
+        shell: bash
         run: |
-          if gh release view "$TAG" -R "$REPO" --json isDraft --jq .isDraft 2>/dev/null | grep -q false; then
-            echo "::error::$TAG is already published; bump the version"; exit 1
-          fi
-          pre=(); [[ "$TAG" == *-* ]] && pre=(--prerelease)
-          gh release view "$TAG" -R "$REPO" >/dev/null 2>&1 || \
+          set -euo pipefail
+          matches=$(gh api --paginate --slurp "repos/$REPO/releases?per_page=100" |
+            jq -c --arg tag "$TAG" '[.[][] | select(.tag_name == $tag)]')
+          if [[ "$matches" == '[]' ]]; then
+            pre=(); [[ "$TAG" == *-* ]] && pre=(--prerelease)
             gh release create "$TAG" -R "$REPO" --draft --verify-tag --title "$TAG" --notes "See CHANGELOG.md for details." "${pre[@]}"
+          else
+            jq -e 'length == 1 and .[0].draft' <<< "$matches" >/dev/null || { echo "::error::$TAG already published or ambiguous"; exit 1; }
+          fi
+          draft=$(gh release view "$TAG" -R "$REPO" --json isDraft,databaseId)
+          id=$(jq -er 'select(.isDraft) | .databaseId' <<< "$draft")
           gh release upload "$TAG" -R "$REPO" dist/* --clobber
+          # Include SHA256SUMS itself. Extra assets from an earlier draft also fail the diff.
+          gh api --paginate "repos/$REPO/releases/$id/assets?per_page=100" --jq '.[] | [.digest, .name] | @tsv' |
+            LC_ALL=C sort > "$RUNNER_TEMP/remote-assets"
+          (cd dist && sha256sum -- *) | sed -E 's/^([0-9a-f]{64})  /sha256:\1\t/' |
+            LC_ALL=C sort > "$RUNNER_TEMP/local-assets"
+          diff -u "$RUNNER_TEMP/local-assets" "$RUNNER_TEMP/remote-assets"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
       - name: Publish and make latest
+        id: promote
+        shell: bash
+        env:
+          id: ${{ steps.draft.outputs.id }}
         run: |
-          id=$(gh api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name==\"$TAG\" and .draft) | .id")
-          latest=true; case "$TAG" in *-*) latest=false;; esac
-          gh api -X PATCH "repos/$REPO/releases/$id" -F draft=false -f make_latest=$latest >/dev/null
+          set -euo pipefail
+          current=$(gh api "repos/$REPO/commits/$TAG" --jq .sha)
+          [[ "$current" == "$COMMIT" ]] || { echo "::error::Tag moved after validation"; exit 1; }
+          latest=true; prerelease=false; case "$TAG" in *-*) latest=false; prerelease=true;; esac
+          # A slower older tag may reach this job after a newer stable release.
+          if [[ "$TAG" != *-* ]]; then
+            published=$(gh api --paginate "repos/$REPO/releases?per_page=100" \
+              --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name | select(test("^v[0-9]+[.][0-9]+[.][0-9]+$"))')
+            newest=$(printf '%s\n' "$TAG" "$published" | sort -V | tail -n 1)
+            [[ "$newest" == "$TAG" ]] || latest=false
+          fi
+          gh api -X PATCH "repos/$REPO/releases/$id" -F draft=false -F prerelease="$prerelease" -f make_latest="$latest" >/dev/null
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
       - name: Post-release verification (anonymous, like a real user)
-        if: ${{ !contains(env.TAG, '-') }}
+        if: steps.promote.outputs.latest == 'true'
         run: |
           [ "$(gh api "repos/$REPO/releases/latest" --jq .tag_name)" = "$TAG" ] || { echo "::error::releases/latest is not $TAG"; exit 1; }
           # the API is the judge; the download redirect can lag a few minutes behind it
           for m in latest.yml latest-mac.yml latest-linux.yml latest-linux-arm64.yml; do
             ok=; for _ in $(seq 1 10); do
-              curl -fsSL "https://github.com/$REPO/releases/latest/download/$m" | grep -q "^version: $VERSION$" && { ok=1; break; }; sleep 60
+              curl -fsSL "https://github.com/$REPO/releases/latest/download/$m" -o "$RUNNER_TEMP/public-feed" && cmp -s "dist/$m" "$RUNNER_TEMP/public-feed" && { ok=1; break; }; sleep 60
             done
             [ -n "$ok" ] || { echo "::error::public $m still stale after 10 min"; exit 1; }
           done
@@ -242,7 +324,7 @@ jobs:
   # 不在那个流水线里的发布者，才用下面注释掉的 winget-releaser 写法。
   #   winget:                                # optional; first version must be submitted manually
   #     needs: publish
-  #     if: ${{ !contains(inputs.tag || github.ref_name, '-') && vars.WINGET_ID != '' }}
+  #     if: ${{ needs.publish.outputs.latest == 'true' && vars.WINGET_ID != '' }}
   #     runs-on: ubuntu-latest
   #     steps:
   #       - name: Token preflight

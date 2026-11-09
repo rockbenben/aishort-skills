@@ -133,7 +133,7 @@ async function main() {
       }
       const from = m[1].trim();
       const to = m[2].trim();
-      if (from) result = result.replaceAll(from, to);
+      if (from) result = result.replaceAll(from, () => to);
     }
   }
 

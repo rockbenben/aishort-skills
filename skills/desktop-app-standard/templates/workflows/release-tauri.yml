@@ -14,7 +14,7 @@ on:
     tags: ['v*']
   workflow_dispatch:
     inputs:
-      tag: { description: 'Existing tag to rebuild, e.g. v1.2.3', required: true }
+      tag: { description: 'Existing tag to rebuild. Dispatch on that tag ref, e.g. v1.2.3', required: true }
 permissions:
   contents: read
 concurrency:
@@ -28,9 +28,10 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
     steps:
       - uses: actions/checkout@v7
-        with: { ref: '${{ env.TAG }}' }
+        with: { ref: 'refs/tags/${{ env.TAG }}' }
       - id: version
         name: Tag is the single version source
         shell: bash
@@ -41,18 +42,50 @@ jobs:
           conf=$(node -p "require('./src-tauri/tauri.conf.json').version ?? ''")
           [ "$pkg" = "$v" ] || { echo "::error::version mismatch: package.json $pkg != tag $v"; exit 1; }
           [ "$conf" = "../package.json" ] || [ "$conf" = "$v" ] || { echo "::error::version mismatch: tauri.conf.json $conf"; exit 1; }
+          commit=$(git rev-parse HEAD)
+          event_commit=$(git rev-parse --verify "$GITHUB_SHA^{commit}") || { echo "::error::Dispatch this workflow on the target tag ref"; exit 1; }
+          [[ "$commit" == "$event_commit" ]] || { echo "::error::Tag and workflow event point to different commits"; exit 1; }
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "version=$v" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v7
         with: { node-version: 26, cache: npm }
       - run: npm ci                     # Yarn 1: yarn install --frozen-lockfile · Yarn 4: corepack enable + yarn install --immutable
-      - run: npm run lint && npm test
+      - run: npm run lint && npm run typecheck && npm test
       - run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: './src-tauri -> target' }
-      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Verify installed Tauri release majors
+        run: |
+          npm ls --depth=0 --json > "$RUNNER_TEMP/npm-tree.json"
+          cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 > "$RUNNER_TEMP/cargo-tree.json"
+          node <<'NODE'
+          const { dependencies } = require(process.env.RUNNER_TEMP + '/npm-tree.json');
+          const metadata = require(process.env.RUNNER_TEMP + '/cargo-tree.json');
+          const targets = require('./.github/desktop-version-targets.json');
+          function verify(name, version, major) {
+            if (!/^\d+\.\d+\.\d+$/.test(version) || Number(version.split('.')[0]) !== major) {
+              throw new Error(name + ': expected stable ' + major + '.x, installed ' + version);
+            }
+            console.log(name, version);
+          }
+          verify('@tauri-apps/cli', dependencies?.['@tauri-apps/cli']?.version, targets.npm['@tauri-apps/cli']);
+          const api = dependencies?.['@tauri-apps/api'];
+          if (api) verify('@tauri-apps/api', api.version, targets.npm['@tauri-apps/api']);
+          const members = new Set(metadata.workspace_members);
+          const direct = new Set(metadata.resolve.nodes.filter(n => members.has(n.id)).flatMap(n => n.deps.map(d => d.pkg)));
+          const crates = metadata.packages.filter(p => direct.has(p.id) && ['tauri', 'tauri-build'].includes(p.name));
+          if (!crates.some(p => p.name === 'tauri')) throw new Error('No direct Tauri core dependency in the app workspace');
+          for (const p of crates) {
+            verify(p.name, p.version, targets.cargo[p.name]);
+            if (p.name === 'tauri' && api && p.version.split('.')[1] !== api.version.split('.')[1]) {
+              throw new Error('Tauri core and JS API must use the same minor');
+            }
+          }
+          NODE
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
 
   draft:                                 # ONE draft created up front: parallel tauri-action jobs would race to create duplicates
     needs: validate
@@ -64,13 +97,17 @@ jobs:
     steps:
       - id: d
         run: |
-          id=$(gh api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -1)
-          if [ -z "$id" ]; then
-            pre=""; case "$TAG" in *-*) pre="--prerelease";; esac
-            gh release create "$TAG" -R "$REPO" --draft --verify-tag $pre --title "$TAG" --notes "See CHANGELOG.md for details."
-            id=$(gh api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -1)
+          set -euo pipefail
+          matches=$(gh api --paginate --slurp "repos/$REPO/releases?per_page=100" |
+            jq -c --arg tag "$TAG" '[.[][] | select(.tag_name == $tag)]')
+          if [[ "$matches" == '[]' ]]; then
+            pre=(); [[ "$TAG" == *-* ]] && pre=(--prerelease)
+            gh release create "$TAG" -R "$REPO" --draft --verify-tag "${pre[@]}" --title "$TAG" --notes "See CHANGELOG.md for details."
+          else
+            jq -e 'length == 1 and .[0].draft' <<< "$matches" >/dev/null || { echo "::error::$TAG already published or ambiguous"; exit 1; }
           fi
-          [ "$(gh api "repos/$REPO/releases/$id" --jq .draft)" = true ] || { echo "::error::$TAG is already published; bump the version (immutable releases cannot be rebuilt)"; exit 1; }
+          draft=$(gh release view "$TAG" -R "$REPO" --json isDraft,databaseId)
+          id=$(jq -er 'select(.isDraft) | .databaseId' <<< "$draft")
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
   build:
@@ -79,6 +116,7 @@ jobs:
       contents: write                    # tauri-action creates/uploads to the draft
     strategy:
       fail-fast: false
+      max-parallel: 1    # tauri-action updates one shared latest.json by reading and replacing it
       matrix:
         include:
           - { os: windows-latest,   target: x86_64-pc-windows-msvc,    args: '--target x86_64-pc-windows-msvc' }
@@ -90,7 +128,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-        with: { ref: '${{ env.TAG }}' }
+        with: { ref: '${{ needs.validate.outputs.commit }}' }
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -108,25 +146,31 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # macOS Developer ID + notarization (optional until you have an Apple account)
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
           # Windows: Azure Artifact Signing via signCommand in tauri.conf (optional until public)
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ runner.os == 'Windows' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ runner.os == 'Windows' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ runner.os == 'Windows' && secrets.AZURE_CLIENT_SECRET || '' }}
         with:
           releaseId: ${{ needs.draft.outputs.id }}   # upload into the single draft (tag already asserted == app version)
-          # latest.json is merged per job; publish re-checks every platform key, so a lost merge fails loudly → rerun that job
+          tagName: ${{ env.TAG }}          # version-specific feed URLs for this releaseId
+          # Each build finishes its feed update before the next matrix leg starts.
           updaterJsonPreferNsis: true      # latest.json → NSIS (default would prefer MSI)
           # tauriScript unset: the action picks the runner from the lockfile (npm run/exec tauri, adds `--` itself)
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} -- --locked
 
   publish:
-    needs: [validate, build]
+    needs: [validate, draft, build]
+    concurrency:
+      group: desktop-release-promotion
+      queue: max
+    outputs:
+      latest: ${{ steps.promote.outputs.latest }}
     runs-on: ubuntu-latest
     environment: release                 # protect with required reviewers = human approval gate
     permissions:
@@ -138,39 +182,66 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       VERSION: ${{ needs.validate.outputs.version }}
+      COMMIT: ${{ needs.validate.outputs.commit }}
+      DRAFT_ID: ${{ needs.draft.outputs.id }}
     steps:
       - name: Exactly one draft for this tag
         run: |
-          n=$(gh api "repos/$REPO/releases?per_page=100" --jq "[.[] | select(.tag_name==\"$TAG\" and .draft)] | length")
-          [ "$n" = 1 ] || { echo "::error::expected 1 draft for $TAG, found $n (parallel jobs created duplicates?)"; exit 1; }
+          set -euo pipefail
+          gh api --paginate --slurp "repos/$REPO/releases?per_page=100" |
+            jq -e --arg tag "$TAG" --arg id "$DRAFT_ID" '[.[][] | select(.tag_name == $tag)] | length == 1 and .[0].draft and (.[0].id | tostring) == $id'
       - name: Download draft assets   # gh resolves drafts by tag for authenticated callers
         run: gh release download "$TAG" -R "$REPO" -D dist
       - name: Verify updater feed and per-platform installers
         run: |
+          set -euo pipefail
           cd dist
+          shopt -s nullglob
           jq -e --arg v "$VERSION" '.version == $v' latest.json
-          for p in windows-x86_64 windows-aarch64 darwin-aarch64 darwin-x86_64 linux-x86_64 linux-aarch64; do
+          keys=(windows-x86_64 windows-aarch64 darwin-aarch64 darwin-x86_64 linux-x86_64 linux-aarch64)
+          # Newer clients prefer the bundle-specific key when present.
+          mapfile -t overrides < <(jq -r '.platforms | keys[] | select(test("^(windows|darwin|linux)-(aarch64|x86_64)-(nsis|msi|app|appimage|deb|rpm)$"))' latest.json)
+          for p in "${keys[@]}" "${overrides[@]}"; do
             url=$(jq -r --arg p "$p" '.platforms[$p].url // empty' latest.json)
             sig=$(jq -r --arg p "$p" '.platforms[$p].signature // empty' latest.json)
             [ -n "$url" ] && [ -n "$sig" ] || { echo "::error::latest.json missing $p"; exit 1; }
             # tauri-action v1 has emitted API asset URLs (/releases/assets/<id>) in
             # latest.json, not only browser download URLs. Resolve both shapes to
             # the asset name before checking the downloaded files.
-            if [[ "$url" == *"api.github.com/repos/"*"/releases/assets/"* ]]; then
+            if [[ "$url" == "https://api.github.com/repos/$REPO/releases/assets/"* ]]; then
               asset_id="${url%%\?*}"; asset_id="${asset_id##*/}"
-              name="$(gh api "repos/$REPO/releases/assets/$asset_id" --jq .name)"
+              [[ "$asset_id" =~ ^[0-9]+$ ]]
+              if [[ ! -f "$RUNNER_TEMP/draft-assets.json" ]]; then
+                gh api --paginate --slurp "repos/$REPO/releases/$DRAFT_ID/assets?per_page=100" > "$RUNNER_TEMP/draft-assets.json"
+              fi
+              name=$(jq -er --argjson id "$asset_id" '.[][] | select(.id == $id) | .name' "$RUNNER_TEMP/draft-assets.json")
             else
-              name="$(basename "${url%%\?*}")"
+              [[ "$url" == "https://github.com/$REPO/releases/download/$TAG/"* ]] || { echo "::error::unexpected feed URL: $url"; exit 1; }
+              name=$(basename "${url%%\?*}")
             fi
-            [ -n "$name" ] && [ -f "$name" ] || { echo "::error::$p points to missing asset $url"; exit 1; }
+            [[ -f "$name" ]] || { echo "::error::$p references missing $name"; exit 1; }
+            [[ -f "$name.sig" && "$(cat -- "$name.sig")" == "$sig" ]] || { echo "::error::$p signature differs from $name.sig"; exit 1; }
+            IFS=- read -r os cpu bundle <<< "$p"
+            case "$os/${bundle:-default}/$name" in
+              windows/default/*-setup.exe|windows/default/*.nsis.zip|windows/nsis/*-setup.exe|windows/nsis/*.nsis.zip) ;;
+              windows/msi/*.msi|windows/msi/*.msi.zip) ;;
+              darwin/default/*.app.tar.gz|darwin/app/*.app.tar.gz) ;;
+              linux/default/*.AppImage|linux/default/*.AppImage.tar.gz|linux/appimage/*.AppImage|linux/appimage/*.AppImage.tar.gz) ;;
+              linux/deb/*.deb|linux/rpm/*.rpm) ;;
+              *) echo "::error::$p references the wrong artifact: $name"; exit 1;;
+            esac
+            case "$cpu" in
+              aarch64) arch='arm64|aarch64';;
+              x86_64) arch='amd64|x64|x86_64';;
+            esac
+            [[ "$name" =~ (^|[-_.])($arch)([-_.]|$) ]] || { echo "::error::$p architecture mismatch: $name"; exit 1; }
           done
-          # One class at a time, so a missing artifact names WHICH class is missing
-          # instead of failing with an opaque `ls` error. The Linux bundle set is
-          # pinned in the build matrix; the Windows/macOS classes come from the app's
-          # own tauri.conf (house style: NSIS + dmg), and this loop names whichever is
-          # absent instead of letting a config change drop a class silently.
-          for f in '*-setup.exe' '*.dmg' '*.AppImage' '*.deb' '*.rpm'; do
-            ls -- $f >/dev/null 2>&1 || { echo "::error::release assets have no $f"; exit 1; }
+          # v1-compatible feeds may point to archives around the standalone NSIS/AppImage.
+          for suffix in -setup.exe .AppImage .dmg .deb .rpm; do
+            assets=( *"$suffix" )
+            for arch in 'arm64|aarch64' 'amd64|x64|x86_64'; do
+              printf '%s\n' "${assets[@]}" | grep -Ei "(^|[-_.])($arch)([-_.]|$)" >/dev/null || { echo "::error::missing $suffix ($arch)"; exit 1; }
+            done
           done
       - name: SHA256SUMS (LF, generated on Linux)
         run: |
@@ -179,17 +250,30 @@ jobs:
       - uses: actions/attest@v4
         with: { subject-checksums: dist/SHA256SUMS }
       - name: Publish and make latest
+        id: promote
+        shell: bash
         run: |
-          id=$(gh api "repos/$REPO/releases?per_page=100" --jq ".[] | select(.tag_name==\"$TAG\" and .draft) | .id")
-          latest=true; case "$TAG" in *-*) latest=false;; esac
-          gh api -X PATCH "repos/$REPO/releases/$id" -F draft=false -f make_latest=$latest >/dev/null
+          set -euo pipefail
+          current=$(gh api "repos/$REPO/commits/$TAG" --jq .sha)
+          [[ "$current" == "$COMMIT" ]] || { echo "::error::Tag moved after validation"; exit 1; }
+          latest=true; prerelease=false; case "$TAG" in *-*) latest=false; prerelease=true;; esac
+          # A slower older tag may reach this job after a newer stable release.
+          if [[ "$TAG" != *-* ]]; then
+            published=$(gh api --paginate "repos/$REPO/releases?per_page=100" \
+              --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name | select(test("^v[0-9]+[.][0-9]+[.][0-9]+$"))')
+            newest=$(printf '%s\n' "$TAG" "$published" | sort -V | tail -n 1)
+            [[ "$newest" == "$TAG" ]] || latest=false
+          fi
+          gh api -X PATCH "repos/$REPO/releases/$DRAFT_ID" -F draft=false -F prerelease="$prerelease" -f make_latest="$latest" >/dev/null
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
       - name: Post-release verification (anonymous, like a real user)
-        if: ${{ !contains(env.TAG, '-') }}
+        if: steps.promote.outputs.latest == 'true'
         run: |
           [ "$(gh api "repos/$REPO/releases/latest" --jq .tag_name)" = "$TAG" ] || { echo "::error::releases/latest is not $TAG"; exit 1; }
+          set -o pipefail
           # the API is the judge; the download redirect can lag a few minutes behind it
           for _ in $(seq 1 10); do
-            curl -fsSL "https://github.com/$REPO/releases/latest/download/latest.json" | jq -e --arg v "$VERSION" '.version == $v' && exit 0
+            curl -fsSL "https://github.com/$REPO/releases/latest/download/latest.json" -o "$RUNNER_TEMP/public-feed" && cmp -s dist/latest.json "$RUNNER_TEMP/public-feed" && exit 0
             sleep 60
           done
           echo "::error::public latest.json still not $VERSION after 10 min"; exit 1
@@ -202,7 +286,7 @@ jobs:
   # 不在那个流水线里的发布者，才用下面注释掉的 winget-releaser 写法。
   #   winget:                                # optional; delete if not on winget. First version must be submitted manually.
   #     needs: publish
-  #     if: ${{ !contains(inputs.tag || github.ref_name, '-') && vars.WINGET_ID != '' }}
+  #     if: ${{ needs.publish.outputs.latest == 'true' && vars.WINGET_ID != '' }}
   #     runs-on: ubuntu-latest
   #     steps:
   #       - name: Token preflight

@@ -1,23 +1,23 @@
 # WPF 项目起手：装什么、建什么、怎么发布
 
-每个位置只给一个选择并说明依据。版本号会漂移，用前先按 SKILL.md 的 "Three iron rules" 第一条核对。
+本技能的 WPF 目标是 .NET 10。新建和升级时按[依赖升级](upgrade-dependencies.md)取得 10.0 通道的最新稳定 SDK，并安装可用于该框架的依赖。
 
-这页只管起手选型和发布配置；撞过的坑在 `pitfalls.md`，验证工具在 `dev-switches.md`，CI 与发版流水线在 `github-actions.md`。.NET 版本还在不在支持期，不靠记忆也不靠这页的日期，用 SKILL.md 铁律一里那行 `releases.json` 查。
+这页只管起手选型和发布配置；撞过的坑在 `pitfalls.md`，验证工具在 `dev-switches.md`，CI 与发版流水线在 `github-actions.md`。
 
 ## 第一个项目装什么
 
-第一次做 WPF 最容易卡住的地方，是每个位置都有五六个候选，光比较就耗掉一周。下面这张表可以直接照抄。
+下表用于选择组件。.NET 10 是目标大版本，示例中的具体 SDK 和 NuGet 补丁号在执行时重新解析。
 
 | 位置       | 选它                                          | 什么时候才该换                                                        |
 | ---------- | --------------------------------------------- | --------------------------------------------------------------------- |
-| 目标框架   | `net10.0-windows`                             | 不换。.NET 8 和 9 同在 2026-11-10 到期，10 是 LTS，管到 2028-11（[支持策略](https://dotnet.microsoft.com/platform/support/policy/dotnet-core)）。下一次换是跟着下一个 LTS |
-| SDK 版本   | `global.json` 写完整 SDK 版本 + `rollForward: latestFeature` | 不换。本地和 CI 读同一份（CI 用 `setup-dotnet` 的 `global-json-file`）；本地补丁靠 `latestFeature` 自动到手，CI 是否执行 `rollForward` 取决于 action 版本，定期抬下限或显式安装 |
+| 目标框架 | `net10.0-windows` | 新建与升级统一对齐 .NET 10，保留实际需要的 Windows 最低版本。 |
+| SDK 版本 | global.json 记录完整 SDK 版本及 rollForward 策略 | 构建环境安装并验证目标稳定 SDK。项目需兼容较低开发 SDK 时，在 CI 单独安装目标补丁。 |
 | 依赖锁     | 不开 `packages.lock.json`；`PackageReference` 写精确版本，net10 起 NuGetAudit 默认连传递依赖一起查漏洞 | 团队能把 SDK 锁死到补丁级（`rollForward: disable`）时才开，原因见下文「NuGet 锁文件：单文件发布先别开」 |
-| 开发环境   | VS 2026 Community 加「.NET 桌面开发」工作负载 | 手里已经有 Rider 就用 Rider。**别用 VS 2022**：它没有 .NET 10 的 SDK band |
+| 开发环境   | VS 2026 Community 加「.NET 桌面开发」工作负载 | 手里已经有 Rider 就用 Rider。面向 net10.0 的 IDE 至少需要 VS 18.0，见下文的 SDK 对应表 |
 | 编辑器扩展 | 一个都不装                                    | 语言数超过五六种时装 ResXManager                                      |
 | MVVM       | `CommunityToolkit.Mvvm`                       | 窗口少、状态简单的小工具，直接 code-behind 也成立                     |
 | 托盘图标   | `H.NotifyIcon.Wpf`                            | 工程本来就开了 `UseWindowsForms` 时，用内建的 NotifyIcon              |
-| 界面主题   | 自己写一份 `Theme.xaml`：语义 token 加控件模板 | 想要 Win11 的原生标题栏壳子，引 `WPF-UI`                              |
+| 界面主题   | WPF 自带的 Fluent 主题（`ThemeMode`，.NET 9 起）叠一份自己的 `Theme.xaml`：语义 token 加未覆盖控件的模板 | 官方自述自带 Fluent 样式仍未做完；要 Win11 原生标题栏壳子（Mica / `NavigationView`）才引 `WPF-UI`      |
 | 配置文件   | 运行时自带的 `System.Text.Json`               | 不换                                                                  |
 | 日志       | 自己往文件里追加一行                          | 需要多个输出目标或结构化查询时上 Serilog                              |
 | 依赖注入   | 不用                                          | 服务多到互相依赖、构造顺序开始绕时再上                                |
@@ -26,7 +26,7 @@
 | 多语言     | resx 加一个几十行的索引器包装                 | 不换。WPF 专属的 x:Uid + LocBaml 路线，[官方自己标注](https://learn.microsoft.com/dotnet/desktop/wpf/advanced/how-to-localize-an-application)是「非生产就绪的示例工具」 |
 | 发布       | pubxml 里自包含和框架依赖各一份单文件，`win-x64` 与 `win-arm64` 各一套，共四份 | 不换。arm64 不发的话，ARM 笔记本上跑的是 x64 模拟 |
 | 自动更新   | 启动后（或设置页里）查一次 GitHub `releases/latest`，比本地版本新就提示并打开 Release 页；零依赖，几十行 | 真需要静默下载替换时上 `Velopack`。`releases/latest` 不含草稿和预发布，所以发版流程必须真的把它切到新 tag（`github-actions.md` 的 publish job 会断言） |
-| 代码签名   | 有资格就签：[Azure Artifact Signing](https://azure.microsoft.com/products/artifact-signing)（前身 Trusted Signing），`github-actions.md` 里的签名步骤配好仓库变量就生效。资格目前是组织在美国、加拿大、欧盟、英国、澳大利亚、新西兰、日本、韩国、新加坡、瑞士、挪威、以色列，个人仅限美国/加拿大（名单会变，以官网现行说法为准） | 没资格就不签：变量留空，签名步骤自动跳过；release 说明里提前写明 SmartScreen 会提示「未知发布者」，并给 SHA256 + attestation 让人能验（`github-actions.md`） |
+| 代码签名   | 有资格就签：[Azure Artifact Signing](https://azure.microsoft.com/products/artifact-signing)（前身 Trusted Signing），`github-actions.md` 里的签名步骤配好仓库变量就生效。签名前按服务当前的身份、地区与证书配置要求核对发布者资格。 | 没资格就不签：变量留空，签名步骤自动跳过；release 说明里提前写明 SmartScreen 会提示「未知发布者」，并给 SHA256 + attestation 让人能验（`github-actions.md`） |
 
 表里不少格子是「不装」「不用」「不做」。实测下来，一个应用工程可以做到零第三方运行时依赖，功能一点没少，所以默认值就该是空的。
 
@@ -44,7 +44,7 @@
 
 分界线不是菜单长短，是工程有没有已经拖进 WinForms。
 
-纯 WPF 工程用 [`H.NotifyIcon.Wpf`](https://www.nuget.org/packages/H.NotifyIcon.Wpf)：它是 [`Hardcodet.NotifyIcon.Wpf`](https://www.nuget.org/packages/Hardcodet.NotifyIcon.Wpf) 的维护继任（同一个控件、API 同源），持续更新并明确列出 net10.0-windows 支持，而 Hardcodet 停在 2024-10——2.0.1 在 net10 下仍能跑，但别给新项目选停更的包（两页 NuGet 的更新日期一眼可核）。托盘和菜单写在 `App.xaml` 的资源里（一个 `TaskbarIcon`，启动时 `FindResource` 取出），和应用其余部分同一套样式。菜单文案要跟语言切时，在语言切换事件里统一刷新各 `MenuItem.Header`，比给每一项拉绑定省事。
+纯 WPF 工程可选 H.NotifyIcon.Wpf。在项目的 NuGet 源查询支持目标 TFM 的最新稳定版，安装并验证创建、显示和销毁托盘图标。托盘和菜单可放进 `App.xaml` 的资源中，在启动时用 `FindResource` 取出。切换语言时同步刷新菜单标题。[H.NotifyIcon.Wpf](https://www.nuget.org/packages/H.NotifyIcon.Wpf)
 
 **放在资源字典里就必须手动 `ForceCreate()`，否则整个应用没有托盘图标。**
 
@@ -62,6 +62,8 @@ H.NotifyIcon 把 shell 图标的创建挂在 `Loaded` 上，而 `App.xaml` 资�
 顺带：这个失败模式 `--smoke` 默认抓不到，因为那两个开关按惯例挂在托盘初始化之前就 `return` 了。值得在 smoke 里补一句断言（取出资源、`ForceCreate()`、判 `IsCreated`、`Dispose()`）——顺便也覆盖了 `IconSource` 那个 pack URI 哪天解析不到的情况。写完记得反向验证一次：临时删掉 `ForceCreate()`，smoke 必须失败，否则这条断言是空跑的。
 
 工程已经因为剪贴板、`SendKeys` 之类开了 `UseWindowsForms`，就用系统自带的 `NotifyIcon`，第三方包一个不装——长菜单加自绘配色（`ToolStripProfessionalRenderer`）也撑得住。代价是菜单样式和 WPF 那套完全分家、文案要手写同步，还会撞上 `pitfalls.md`「副屏上窗口位置算错」里说的 `WFO0003` 分析器警告。
+
+**但「为了剪贴板才拖进 WinForms」这条前提在 net10 上弱了不少**：.NET 10 起 WPF 与 Windows Forms 用同一套剪贴板 API（官方把两边统一了），同时废弃了依赖 `BinaryFormatter` 的那几个方法、并在补走 JSON 序列化的替代方法。新项目直接用 WPF 的 `Clipboard` 就够了，不必为此开 `UseWindowsForms`；为了托盘而回炉已有工程也不划算——这条只在「WinForms 已经因为别的原因在里面」时成立。
 
 ### MVVM：`CommunityToolkit.Mvvm`，或者干脆 code-behind
 
@@ -86,9 +88,11 @@ public partial class MainViewModel : ObservableObject
 
 小工具的界面元素来来去去就是按钮、输入框、列表、复选框，八到十个控件。建一份 `Theme.xaml` 放语义化的 brush token（`Brush.Surface`、`Brush.TextPrimary`、`Brush.Accent` 这类命名）加这几个控件的 `ControlTemplate`；要深浅两套主题时，把浅色做成一份只含覆盖键的小字典，运行时换字典。token 一律走 `DynamicResource` 引用——`StaticResource` 在 XAML 加载时解析一次、之后不再求值，运行时换字典它不跟；`DynamicResource` 每次用到时现查，换主题才换得动（这是[官方文档](https://learn.microsoft.com/dotnet/desktop/wpf/systems/xaml-resources-overview)写明的两者语义差别）。前期花一两天，之后每次改设计都只是改 token，不会因为库升级导致样式漂移。
 
+**先试运行时自带的 Fluent 主题，再决定要不要动手做深浅两套。** WPF 从 .NET 9 起自带 Fluent 主题（Windows 11 观感，含明暗两套与系统强调色），两条启用路径：在 `Application` 或单个 `Window` 上设 `ThemeMode`（`Light` / `Dark` / `System`，默认 `None`），或把资源字典 `pack://application:,,,/PresentationFramework.Fluent;component/Themes/Fluent.xaml` 合进 `App.xaml`（也可以只合到某个窗口）。官方在 .NET 10 的说明里仍写着「Fluent UI style support is still in progress」，但那一版把可主题化的控件补齐了不少（DatePicker、GridSplitter、GridView、GroupBox、Hyperlink、Label、NavigationWindow、RichTextBox、TextBox），修了 Expander 的动画、HighContrast 相关的崩溃，并修好 `MenuItem` / `Expander` / `TreeViewItem` 的**从右到左布局**——阿拉伯语界面要靠这三句才不歪，所以「目标框架不低于 net10」对多语言项目是有具体依据的。自带主题没覆盖的部分继续用你自己的 token 与模板补：上层的 `DynamicResource` 那套语义 brush 照常成立，只是不再需要连按钮的基础样式都自己画。
+
 引控件库反而是负债，库的设计意见会和你自己的视觉方向一直打架，最后花在拆掉它默认动效上的时间比自己写模板还多。
 
-值得引库的情况只有一种：你要的就是 Win11 那套原生壳子。这时候用 `WPF-UI`，图它的 `FluentWindow`（`ExtendsContentIntoTitleBar` 自定义标题栏，可选 Mica 背景）、`NavigationView` 和跟随系统深浅色的 `ApplicationThemeManager`。配色可以覆盖它的画刷资源，也可以只借壳、内容继续走自己的 token——买壳不必连整套设计语言一起买。
+值得引库的情况只剩一种：你要的是 Win11 的**窗口壳子**本身——`FluentWindow`（`ExtendsContentIntoTitleBar` 自绘标题栏、可选 Mica 背板）和 `NavigationView`。深浅色不再是引它的理由：自带的 `ThemeMode="System"` 就做了，一个界面里不要同时留两套主题开关（`ApplicationThemeManager` 只在借壳之后才需要讨论）。配色可以覆盖它的画刷资源，也可以只借壳、内容继续走自己的 token——买壳不必连整套设计语言一起买。
 
 要在应用里放带行号和语法高亮的编辑框，用 `AvalonEdit`，WPF 原生控件，不是套壳 WebView。它不带 YAML、INI、Shell 的高亮定义，得自己写 `.xshd` 并作为 `EmbeddedResource` 打进程序集，否则单文件发布之后加载不到。
 
@@ -131,32 +135,33 @@ Core 的目标框架能不带 `-windows` 就不带，判断标准是里面有没
 
 测试工程用 `dotnet new install xunit.v3.templates` 之后的 `xunit3` 模板建，`dotnet new xunit` 给的还是 v2。包名和版本号在这里是分开的两件事：包一直叫 `xunit.v3`，而它的版本号已经走到 4.x（2026-08 发布的 4.0.0），别看到 4 就以为装错了包、回头去找不存在的 `xunit.v4`。v3 的测试程序集是自执行的 exe，跑在 Microsoft Testing Platform 上，`Microsoft.NET.Test.Sdk`、`xunit.runner.visualstudio`、`coverlet.collector` 全都不需要，四个包变一个。断言用它自带的 `Assert`，别引 [FluentAssertions](https://www.nuget.org/packages/FluentAssertions)，那个库从 8.0 起换成了商用收费许可证（NuGet 页的 License 一栏可核）。
 
-MTP 顺带给了一个实用参数：
+使用支持 MTP 的 xUnit v3 模板（测试平台 1.7 或更高），并设置下一节的 `global.json`，可为运行的测试数设下限。
 
 ```bash
-dotnet test tests/Xxx.Core.Tests -c Release -- --minimum-expected-tests 1
+dotnet test --project tests/Xxx.Core.Tests -c Release --minimum-expected-tests 1
 ```
 
 适配器没加载好的时候，`dotnet test` 会一个用例不跑却退出 0，CI 显示绿色，这个参数就是防它的。
 
 ### SDK 固定：global.json 一处说了算
 
-仓库根放一份 `global.json`，SDK 版本只在这里出现一次：
+在选定的 10.0 SDK 下创建 `dotnet new wpf -n MyApp -f net10.0`，再按需用 `dotnet add MyApp/MyApp.csproj package <包名> --version <稳定版本>` 添加依赖。已有工程保留自己的测试 runner。下例的 test 段仅适用于选择 MTP 的项目。[Microsoft 测试运行模式](https://learn.microsoft.com/dotnet/core/testing/unit-testing-with-dotnet-test)
 
 ```json
 {
   "sdk": {
-    "version": "10.0.402",
+    "version": "10.0.100",
     "rollForward": "latestFeature",
     "allowPrerelease": false
-  }
+  },
+  "test": { "runner": "Microsoft.Testing.Platform" }
 }
 ```
 
-- **写完整版本**（`10.0.402`，不是 `10.0.x`）：它是**下限**，也是 `rollForward` 的起点。下限不是"当前最新 SDK"——实测把下限设成比本机装的还新（比如本机只有 10.0.303 时下限写 10.0.402）会直接解析失败。`latestFeature` 让本机补丁自己到手，所以只有在要用新 feature band 的功能时才抬这个数；想知道当前最新是多少，查官方 release metadata 或按 SKILL.md 铁律一核对。
-- **`latestFeature` 让本机补丁自己到手**：本机在已安装的 SDK 里挑最新的 10.0.x（VS 2026 自己升级后不会编不过）。CI 侧要单独看：`setup-dotnet` 的 `global-json-file` 读的是 `sdk.version`，不要假设它会替你执行 `rollForward`（升级 action 前核对其 README/源码）。CI 实际拿到的补丁取决于 action 版本与 runner 预装的 SDK；要保证 CI 也带上最新运行时补丁，定期抬 `global.json` 的下限，或显式安装目标 SDK。自包含版把运行时打进 exe，CI 用哪个 SDK 就带哪个运行时补丁。
-- **CI 里不再写 `dotnet-version`**：`setup-dotnet` 用 `global-json-file: global.json`。两处都写就是两个版本源，升级时必有一处被忘掉。
-- **换大版本**（到下一个 LTS）时，`global.json`、所有 csproj 的 `TargetFramework`、四份 pubxml 的 `TargetFramework`、pubxml 文件名和 release body 里的 `needs-dotnet10` 一起改。
+- **写完整版本**。新项目把示例里的 `10.0.100` 换成本次选定的稳定 SDK。升级时先让本地和 CI 能安装目标 SDK，再更新所需 pin 并运行 `dotnet --version` 核验。
+- **`latestFeature` 让本机可选已安装的补丁**：本机在已安装的 SDK 里挑最新的 10.0.x（VS 2026 自己升级后不会编不过）。CI 侧要单独看：`setup-dotnet` 的 `global-json-file` 读的是 `sdk.version`，不要假设它会替你执行 `rollForward`（升级 action 前核对其 README/源码）。CI 实际拿到的补丁取决于 action 版本与 runner 预装的 SDK；要保证 CI 也带上最新运行时补丁，定期抬 `global.json` 的下限，或显式安装目标 SDK。自包含版把运行时打进 exe，CI 用哪个 SDK 就带哪个运行时补丁。
+- CI 可以通过 `global-json-file` 安装项目指定的 SDK。若 global.json 必须保留更低的开发下限，在 CI 单独安装期望的 SDK 并记录实际选择。
+- **迁到 .NET 10** 时，同步修改实际消费 TFM 的项目、pubxml、运行时安装说明、CI 和 `needs-dotnet10` 产物名。只有技能目标或用户明确要求变化时，再迁往其他大版本。
 
 #### 下限的作用，以及它锁住什么
 
@@ -180,7 +185,7 @@ Install the [10.0.402] .NET SDK or update ...\global.json to match an installed 
 
 **因此下限该写哪个版本，取决于一件具体的事：你要不要兼容只装着旧 SDK 的机器。**
 
-- **只管自己和 CI**（单人/小团队，CI 每次现装最新 SDK）：下限写当前补丁号最省事——反正 CI 装的就是最新的，本机也不会低于它。
+- **只管自己和 CI**（单人/小团队，CI 按指定版本安装 SDK）：下限写当前补丁号最省事——CI 可以安装该下限，本机也需要满足它。
 - **要兼容别人的机器**（有贡献者、或者你的用户会自己 build）：下限写**该大版本的 GA 基线**（`10.0.100`），补丁自己往上走，GA 基线一次写完不用再改。查法：release-metadata 里 `10.0.100` 就是 10.0 这条线上第一个 GA SDK（preview/rc 另编号）。
 
 **别把「下限」和「你要的能力」搞混。** 下限抬高到某个 feature band 之上，等于宣布「低于它的机器一律不支持」——这是有意的门槛，不是 bug；选它的时候知道自己在排除谁就行。
@@ -211,9 +216,9 @@ dotnet-install.ps1 -Version 10.0.100 -InstallDir <临时目录> -NoPath
 1. 普通 `dotnet restore` 生成的锁文件，拿去 locked-mode `dotnet publish` → `NU1004`。`PublishSingleFile` 会打开单文件分析器，SDK 因此隐式引用 `Microsoft.NET.ILLink.Tasks`，锁文件里没有它。
 2. 在 csproj 里常开 `EnableSingleFileAnalyzer`，四份 profile 都能 locked-mode 发布了；但换到 SDK 10.0.401 再还原 → `NU1004 … ILLink.Tasks version has changed from [10.0.13, ) to [10.0.12, )`。这个包的版本跟着 SDK 补丁走，**每个补丁日锁文件都会失配**。
 
-.NET SDK 团队在 [dotnet/sdk#48795](https://github.com/dotnet/sdk/issues/48795) 给的现行答复是：用锁文件就把 SDK 也锁死（`rollForward: disable`），整条工具链同步升级。这和上一节「本机补丁自己到手」正好相反。
+.NET SDK 团队在 [dotnet/sdk#48795](https://github.com/dotnet/sdk/issues/48795) 给的现行答复是：用锁文件就把 SDK 也锁死（`rollForward: disable`），整条工具链同步升级。这和上一节「本机可选已安装的补丁」正好相反。
 
-默认：**不开锁文件**。`PackageReference` 写精确版本（`Version="2.3.0"`，不写 `2.*`），发版前 `dotnet list package --outdated` 看一眼；`net10.0` 起 NuGetAudit 默认是 `all`，传递依赖的已知漏洞在还原时就报 `NU190x` 警告。
+本例的新项目使用明确的 PackageReference 版本。新建或升级时实际更新并还原，按[升级流程](upgrade-dependencies.md)复核过期包和传递依赖的安全公告。已有锁文件的项目按原策略刷新并验证。
 
 真要开：csproj 加 `RestorePackagesWithLockFile` 和 `EnableSingleFileAnalyzer`，`global.json` 改 `rollForward: disable`，每次升 SDK 都跑 `dotnet restore --force-evaluate` 并提交锁文件。少一条，就会在某个补丁日红掉。
 
@@ -259,3 +264,49 @@ P/Invoke 要过一遍：`IntPtr`/`nint` 写法本来就和架构无关，但手�
 `PublishDir` 特意写成短路径而不是默认的 `bin\Release\net10.0-windows\win-x64\publish\`，因为发版脚本要按名字取这四个 exe；改了这里记得同步 `github-actions.md` 里的打包步骤。
 
 从 1.0.x 模板升上来的项目：旧的两份叫 `publish\` 和 `publish-needs-dotnet10\`，改名后 CI 的打包路径要一起改，否则打包那步找不到文件（Actions 的 `pwsh` 默认 `$ErrorActionPreference = 'stop'`，`Compress-Archive` 找不到文件会让这步直接红，不会静默少一个资产）。
+
+
+### 发布包组织：三轨分发矩阵（安装包 + 便携 ZIP + 框架依赖精简版）
+
+只发裸 exe 或只发 zip，用户体验各缺一半：小白用户找不到桌面图标、卸载不会清注册表；极客用户嫌弃安装包污染环境。推荐采用「多层兼顾、分级供给」的三轨分发模式（三个渠道）：
+
+| 渠道 | 产物命名 | 内核形态 | 适用受众与优势 |
+| :--- | :--- | :--- | :--- |
+| **1. 官方安装包（主力推荐）** | `Xxx-<tag>-setup.exe` | Inno Setup 6 封装自包含 x64 exe | **普通大众首选**：安装无需装 .NET 运行时；自动接管桌面/开始菜单快捷方式；控制面板支持标准干净卸载并清理右键菜单与临时目录；支持 winget 命令行无感静默部署。 |
+| **2. 自包含便携包（极客必备）** | `Xxx-<tag>-win-x64.zip`<br>`Xxx-<tag>-win-arm64.zip` | 单文件自包含 exe 打包进 zip | **便携党/移动办公**：U 盘即插即用、解压即跑，不写全局注册表、不进 Program Files，自由存放。 |
+| **3. 框架依赖精简包（开发者通道）** | `Xxx-<tag>-win-{x64,arm64}-needs-dotnet10.zip` | 框架依赖单文件 exe 打包进 zip | **高阶/小体积追求者**：在 release 说明中注明「需预装 .NET 10 Desktop Runtime」。 |
+
+#### Inno Setup 6 最佳实践配置要点
+
+写 `.iss` 脚本时有四处关键承重设计（可直接参考成熟桌面项目配置）：
+
+1. **免管理员提权（避免黄色 UAC 弹窗）**：
+   ```ini
+   PrivilegesRequired=lowest
+   DefaultDirName={localappdata}\Programs\{#MyAppName}
+   ```
+   安装到用户的 `AppData\Local\Programs`，普通标准用户权限即可快速安装，绝不向用户索要管理员密码。
+2. **支持 winget 静默安装与企业部署**：
+   脚本必须兼容 Inno Setup 标准开关 `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-`，供 winget、Chocolatey、Scoop 或企业批量脚本自动化推送。
+3. **卸载时干扫尾**：
+   在 `[UninstallDelete]` 或 `[Code]` 卸载阶段，显式清除非用户数据目录（如 `%LOCALAPPDATA%\Xxx\export` 拖拽临时物化目录、无用临时缓存），并注销外壳右键关联，不在系统留下残留垃圾。
+4. **安装包图标绑定与旧指令规避**：
+   Inno Setup 6.0+ 起，旧的 `UninstallIconFile` 指令已正式废弃并会触发编译告警。统一在 `[Setup]` 段声明 `SetupIconFile=app.ico`，并在 `[Icons]` 节中为各个快捷方式指定具体图标文件。
+
+CI 记录实际调用的 ISCC.exe 路径，从编译横幅核对 6.x。runner 预装的是其他大版本时，安装本技能指定的 6.x 稳定编译器再生成安装包。[Inno Setup 编译器参数](https://jrsoftware.org/ishelp/topic_compilercmdline.htm)
+
+### 应用原生图标（PE 标头）：右键菜单与 Shell 集成不显白纸的底线
+
+即使在各窗口 XAML 里声明了 `Icon="pack://application:,,,/Resources/app.ico"`，若 `.csproj` 漏掉了 `<ApplicationIcon>`，生成的 EXE PE 头部就不会写入 `RT_GROUP_ICON` 原生资源表（ID 1）。
+
+Windows 资源管理器读取右键菜单注册表命令（如 `Xxx.exe,0`）、发送到菜单（SendTo）或未固定到任务栏的外部进程时，**只认 PE 头部的原生 Windows 资源**。缺失时会统一回退显示 Windows 默认白纸图标。
+
+在主 App 的 `.csproj` 的主 `<PropertyGroup>` 里必须显式配置：
+
+```xml
+<PropertyGroup>
+  <ApplicationIcon>Resources\app.ico</ApplicationIcon>
+</PropertyGroup>
+```
+
+编译后直接检查发布目录中的 exe 和实际安装的快捷方式。若 Shell 条目显式指定了另一个图标路径，还需对照注册项与快捷方式设置。

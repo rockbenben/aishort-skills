@@ -3,11 +3,11 @@
 ## 输出模板
 
 ```text
-结论：建议动作 / 建议目标 / 阻断事项 / 是否修改或发布
+任务模式 / 已完成的升级或只读巡检结论 / 剩余阻碍
 核验时间（UTC）、项目路径或 commit、模式、扫描/网络限制
 
 1. 版本矩阵
-组件 | 声明范围 | 锁文件解析值与位置 | 最新稳定版与来源 | 建议目标 | 支持/兼容状态
+组件 | 原解析版 → 实际解析版与位置 | 上游稳定版 | 技能目标 major / 该线稳定版与来源 | 是否对齐 / 阻碍和复查条件
 Node 工具链 | CI node-version / node-version-file（.nvmrc 仅提示） | Active/Maintenance/EOL | latest LTS（官方 schedule） | 发现
 
 1b. .NET 运行时与 SDK（--dotnet）
@@ -24,7 +24,7 @@ Node 工具链 | CI node-version / node-version-file（.nvmrc 仅提示） | Act
 特性 | 解决的应用问题 | 平台/版本门槛 | 预期收益 | 风险成本 | 采用/暂缓/不适用
 
 4. House style 差距
-当前做法 | house style（references/house-style.md）| 是否有 .desktop-policy.json 记录的偏离 | 建议 PR
+当前做法 | 项目约束或偏离 | 本次修改（只读巡检填写建议动作）
 
 5. CI & Release（独立分区，单独 P0/P1/P2，不与框架风险混排）
 ciFindings（references/ci-traps.md）| Action 大版本与 suggestedPin | 平台覆盖 | 草稿/签名/发布/feed
@@ -41,16 +41,18 @@ ciFindings（references/ci-traps.md）| Action 大版本与 suggestedPin | 平�
 
 简短请求可精简；P0、采集失败、未验证平台和授权边界不可省略。
 
-每份报告结尾写“本次没有做什么”：没有改代码/锁文件/工作流、没有运行构建、没有发布、没有测试真实更新（除非用户授权并实际做了）。
+新建或升级时附上锁文件或还原结果、实际运行的验证及受环境限制的检查。只读任务写明采集范围即可。
 
 ## 事实与推断
+
+- 目标表内的组件按技能规定的 major 核对。npm 的上游 latest 指 dist-tag，Cargo 的上游稳定版排除 yanked 和预发布。报告的 targetStable 用于寻找该 major 的最新稳定候选，实际采用值以应用锁文件和兼容验证为准。
 
 - 当前版本由锁文件/实际安装/已发布产物分别提供，不以声明下界冒充实际版本。
 - `usageHints` 是代码形字符串命中，不是调用图、漏洞可达性或语义证明；无匹配不等于无影响。
 - `ciFindings` 不能解析完整 YAML（`confidence: heuristic`）；可能命中字符串或脚本文本。必须人工阅读上下文，追踪 reusable workflows。
 - `latestReleaseTag` 取自 `releases/latest`；拿不到时 `latestMajor` 退回前 100 个 Action tags 里最高的 `vN`，**不是确认的最新可用版本**；`tagListingTruncated`（tags 满 100）必须保留。需要时分页核验并读取 action metadata。
 - `collectionComplete` 只描述脚本的有界事实采集，不包括插件所有 changelog、CVE 数据库、构建、签名、性能或真实更新测试。
-- `.NET` 的 TFM/EOL 来自官方 release metadata；`global.json` 的 `rollForward` 结论按官方语义（只有 `latest*` 保证选到最新，默认是 `patch`）。脚本不执行 `dotnet`/MSBuild，SDK pin 是否真的能在目标机器/CI 解析仍需实测；`netstandard` 是库 TFM、`net4x` 是 .NET Framework，都不走 .NET 运行时 EOL 数据。
+- `.NET` 的 TFM/EOL 来自官方 release metadata；`global.json` 的 `rollForward` 结论按官方语义（只有 `latest*` 保证选到最新，默认是 `patch`）。脚本不执行 `dotnet`/MSBuild，项目旁最近的 global.json 只是静态线索；CLI 从命令的工作目录向上查找，用实际构建目录里的 `dotnet --version` 核验；`netstandard` 是库 TFM、`net4x` 是 .NET Framework，都不走 .NET 运行时 EOL 数据。
 - 扫描跳过符号链接或不可读目录时，那些子树没有被审计：`collectionComplete` 为 false、退出码 2，文本报告的 Heads-up 会逐条列出（JSON 的 `scan.skipped` 保留完整清单）。
 - Node 的 Active/Maintenance/EOL 来自 nodejs/Release 官方 schedule；`node-version-*` 的 pin 位置是行扫描（heuristic），CI 是否真的按该版本执行仍需读 `setup-node` 步骤。P 级只针对 CI 的 `node-version` / `node-version-file`；`.nvmrc`/`.node-version` 是可选本地文件，过期只作 Heads-up。Node 是构建工具，不是应用运行时（Electron 内置 Node）。
 

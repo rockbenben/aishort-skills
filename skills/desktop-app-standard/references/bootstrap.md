@@ -5,23 +5,25 @@
 
 ## 1. 选框架（见 house-style.md）
 
-默认 Tauri v2；需要 Chromium 一致性或 Node 原生生态时选 Electron + electron-builder。先在线核验当前稳定版（`audit.mjs` 或 registry），不要抄本文件里的数字。
+默认选 Tauri 2。需要 Chromium 一致性或 Node 原生生态时选 Electron + electron-builder，组件大版本见[技能目标表](version-targets.json)。
 
 ## 2. 脚手架（npm）
 
 ```bash
 # Tauri
-npm create tauri-app@latest      # 选 TypeScript + 所需前端框架；package.json 会有 "tauri": "tauri" 脚本
+# 从 create-tauri-app 的发布说明选仍生成目标框架大版本的脚手架，将实际版本赋给 scaffoldVersion
+npm create "tauri-app@${scaffoldVersion:?先设置脚手架版本}"
 # Electron：选一个带 electron-builder 的模板，或在现有前端中加入：
-npm view electron electron-builder electron-updater version   # latest stable at bootstrap
-npm i -D electron electron-builder && npm i electron-updater
+# 从目标大版本表和包源取三个实际稳定版本，分别赋给以下变量
+npm i -D "electron@${electronVersion:?}" "electron-builder@${builderVersion:?}"
+npm i "electron-updater@${updaterVersion:?}"
 npx install-electron             # Electron ≥ 42 不再在 postinstall 下载运行时
-git add package-lock.json        # 锁文件入库；CI 用 npm ci
+# 保留生成的 package-lock.json，CI 用 npm ci
 ```
 
-已有的 Yarn/pnpm 项目不迁；复制模板时把 `cache: npm` + `npm ci` 换成对应写法（模板注释里有）。
+Electron 新项目需要可执行入口：在 package.json 指定主进程文件，为开发启动和打包配置 scripts，在主进程创建 BrowserWindow 并加载项目的页面。先启动生成的应用，再接发布模板。已有 Yarn/pnpm 项目沿用其锁文件和包管理器，复制模板时同步调整安装和缓存步骤。
 
-Electron 三件套从 npm `latest` 取；不要装 `electron-builder@next` / `electron-updater@next`（27 / 7 alpha）做稳定应用。`npm latest` 是安装目标，dist-tags 里的 `vNN` 可能领先一个 patch；要立即拿这个稳定补丁就装 `@vNN`，否则等 `latest` 追平，`audit.mjs` 会把 GitHub 更新的 release 标出来。原生模块用 `@electron/rebuild`，旧名 `electron-rebuild` 已弃用。
+脚手架生成后，按[依赖升级](upgrade-dependencies.md)逐项更新应用、前端和打包工具，核对并保留锁文件。Electron 原生模块按目标版本使用配套的 rebuild 工具。
 
 `create-electron-app` 生成的是 Electron Forge 项目；要按 house style 用 electron-builder，就不要用它，或在第一天迁移。
 
@@ -32,7 +34,7 @@ Electron 三件套从 npm `latest` 取；不要装 `electron-builder@next` / `el
 
 ## 4. 自动更新（第一天就接）
 
-- **Tauri**：`npm run tauri signer generate -- -w ~/.tauri/<app>.key`；公钥写入 `plugins.updater.pubkey`，endpoint 用 `https://github.com/<owner>/<repo>/releases/latest/download/latest.json`；`bundle.createUpdaterArtifacts: true`；私钥与密码存入 secrets `TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)`，离线备份——丢了旧用户就无法再更新。
+- **Tauri**：`npm run tauri -- signer generate -w ~/.tauri/<app>.key`；公钥写入 `plugins.updater.pubkey`，endpoint 用 `https://github.com/<owner>/<repo>/releases/latest/download/latest.json`；`bundle.createUpdaterArtifacts: true`；私钥与密码存入 secrets `TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)`，离线备份——丢了旧用户就无法再更新。
 - **Electron**：electron-builder 配置 `publish: { provider: github }`；Windows target `nsis`，macOS `dmg`+`zip`，Linux `AppImage`+`deb`+`rpm`；主进程 `autoUpdater.checkForUpdatesAndNotify()`（electron-updater）。
 
 ## 5. 版本单一来源
@@ -44,15 +46,16 @@ Electron 三件套从 npm `latest` 取；不要装 `electron-builder@next` / `el
 
 | 模板 | 放到 |
 |---|---|
+| [references/version-targets.json](version-targets.json) | `.github/desktop-version-targets.json`，与工作流一起纳入版本控制 |
 | templates/workflows/ci.yml | `.github/workflows/ci.yml` |
 | templates/workflows/release-tauri.yml 或 release-electron.yml | `.github/workflows/release.yml` |
 | templates/desktop-policy.example.json | `.desktop-policy.json`（只在需要偏离时写 deviations） |
 
-模板里的 Action 钉的是**大版本标签**（house style）。复制后先跑 `node scripts/audit.mjs <repo> --ci-only`，按报告里的 `action-major-behind` 升大版本。仓库设置：创建 `release` environment 并设 required reviewers；Actions 默认 token 保持只读（模板按 job 提权）。
+模板里的 Action 标签和 Node 版本来自编写时的环境。复制后核实当前的稳定 release、Active LTS 及 runner 要求，实际更新工作流。随后执行 `node "{SKILL_DIR}/scripts/audit.mjs" "<repo>" --ci-only` 复查。发布审批和 token 权限见[发布流程](release-flow.md)。
 
 ## 7. 首次发布检查
 
-1. `node scripts/audit.mjs <repo>`：框架 P0/P1 和 CI P0 为零。
+1. `node "{SKILL_DIR}/scripts/audit.mjs" "<repo>"`：框架 P0/P1 和 CI P0 为零。
 2. 推 `v0.1.0`：构建 job 全绿（Tauri 矩阵 6 个；Electron 每 OS 一 job，3 个）；草稿只有一个；`latest.json` / `latest*.yml` 覆盖所有平台。
 3. 审批 `release` environment 后，`releases/latest` 指向新 tag，匿名可下载 feed。
 4. 在每个 OS 上安装 v0.1.0，再发 v0.1.1，验证**真实的 N→N+1 更新**（下载、验签、安装、重启、数据保留）。这一步之前不要对外宣布“自动更新可用”。

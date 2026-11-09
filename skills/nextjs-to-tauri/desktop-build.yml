@@ -20,18 +20,10 @@
 # that ships it: this file is COPIED into your project as
 # .github/workflows/desktop-build.yml, and that copy is yours to edit.
 #
-# tauri-action v1 traps worth knowing before your first re-run:
-#  * Observed on tauri-action v1, not documented in its README (which only says the
-#    action "will try to find an existing release for that tag"): a draft run will not
-#    adopt a published release. With releaseDraft: true the action scans the release list
-#    for a DRAFT carrying this tag; on finding a published one it warns and falls through
-#    to CREATING a release for the same tag, which GitHub then rejects. So re-running a
-#    tag you have un-drafted needs the release deleted first, and the manual path must
-#    not pass a tagName at all — see below.
-#  * Same status: it rewrites an existing release's name and body only when that release
-#    is already PUBLISHED (updating a draft would move its tag and duplicate it). In the
-#    normal draft flow the first matrix job creates the draft and the other three only
-#    upload into it, so generated notes are written once, not once per job.
+# One job creates or reuses a draft, then all matrix legs upload to that releaseId.
+# Published releases fail the draft preflight. Manual runs skip the draft and only build.
+# max-parallel serializes the action's read-modify-write of latest.json. Before manually
+# publishing, verify-draft checks the version, every supported platform and its asset.
 #  * Two inputs look tempting and mostly are not: uploadPlainBinary is documented for
 #    `--no-bundle` builds only, so it does not replace the portable-exe steps below when
 #    you also ship installers; updaterJsonPreferNsis switches latest.json's
@@ -44,12 +36,48 @@ on:
   push:
     tags: ["v*"]
 
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: false
+  queue: max
+
 jobs:
+  draft:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      id: ${{ steps.draft.outputs.id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - id: draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::Expected vX.Y.Z or vX.Y.Z-prerelease tag"; exit 1; }
+          matches=$(gh api --paginate --slurp "repos/$REPO/releases?per_page=100" |
+            jq -c --arg tag "$TAG" '[.[][] | select(.tag_name == $tag)]')
+          if [[ "$matches" == '[]' ]]; then
+            pre=(); [[ "$TAG" == *-* ]] && pre=(--prerelease)
+            gh release create "$TAG" -R "$REPO" --draft --verify-tag --title "$TAG" --generate-notes --notes "See CHANGELOG.md for details." "${pre[@]}"
+          else
+            jq -e 'length == 1 and .[0].draft' <<< "$matches" >/dev/null
+          fi
+          id=$(gh release view "$TAG" -R "$REPO" --json databaseId --jq .databaseId)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
   publish-tauri:
+    needs: draft
+    if: ${{ !cancelled() && (needs.draft.result == 'success' || needs.draft.result == 'skipped') }}
     permissions:
       contents: write
     strategy:
       fail-fast: false
+      max-parallel: 1  # latest.json is a shared read-modify-write asset
       matrix:
         include:
           - platform: "macos-latest" # Apple Silicon
@@ -126,13 +154,14 @@ jobs:
           # Tag push -> create or fill the draft release. Manual run -> build only:
           # with no tagName the action skips every upload (its README's "just build"
           # mode), so testing the pipeline cannot touch a real release.
+          releaseId: ${{ needs.draft.outputs.id }}
           tagName: ${{ github.event_name == 'push' && 'v__VERSION__' || '' }}
           releaseName: ${{ github.event_name == 'push' && '<App Title> v__VERSION__' || '' }}
           # Prepended to GitHub's generated changelog; releaseName still wins for the title.
           releaseBody: "See the assets to download and install."
           generateReleaseNotes: true
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           # A manual run uploads to no release, so the bundles are only reachable as
           # workflow artifacts. On a tag push the release already carries them.
           uploadWorkflowArtifacts: ${{ github.event_name != 'push' }}
@@ -208,3 +237,42 @@ jobs:
           RELEASE_URL: ${{ steps.tauri.outputs.releaseHtmlUrl }}
           APP_VERSION: ${{ steps.tauri.outputs.appVersion }}
         run: printf '### Draft release v%s\n\n[Open the draft release](%s)\n\nThis release is a **draft**. The updater resolves `releases/latest`, which\nignores drafts — publish it or no client will ever be offered this version.\n' "$APP_VERSION" "$RELEASE_URL" >> "$GITHUB_STEP_SUMMARY"
+
+
+  verify-draft:
+    if: github.event_name == 'push'
+    needs: [draft, publish-tauri]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+      DRAFT_ID: ${{ needs.draft.outputs.id }}
+    steps:
+      - name: Verify all updater platforms before manual publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" -R "$REPO" --json isDraft --jq .isDraft | grep -qx true
+          gh release download "$TAG" -R "$REPO" --dir dist
+          jq -e --arg version "${TAG#v}" '
+            .version == $version and
+            (.platforms | has("windows-x86_64") and has("darwin-aarch64") and
+             has("darwin-x86_64") and has("linux-x86_64"))' dist/latest.json
+          jq -er '.platforms[] | [.url, .signature] | @tsv' dist/latest.json > feed.tsv
+          while IFS=$'\t' read -r url signature; do
+            if [[ "$url" == "https://api.github.com/repos/$REPO/releases/assets/"* ]]; then
+              asset_id="${url%%\?*}"; asset_id="${asset_id##*/}"
+              [[ "$asset_id" =~ ^[0-9]+$ ]]
+              if [[ ! -f "$RUNNER_TEMP/draft-assets.json" ]]; then
+                gh api --paginate --slurp "repos/$REPO/releases/$DRAFT_ID/assets?per_page=100" > "$RUNNER_TEMP/draft-assets.json"
+              fi
+              name=$(jq -er --argjson id "$asset_id" '.[][] | select(.id == $id) | .name' "$RUNNER_TEMP/draft-assets.json")
+            else
+              [[ "$url" == "https://github.com/$REPO/releases/download/$TAG/"* ]] || exit 1
+              name=$(basename "${url%%\?*}")
+            fi
+            [[ -f "dist/$name" && -n "$signature" ]] || exit 1
+          done < feed.tsv

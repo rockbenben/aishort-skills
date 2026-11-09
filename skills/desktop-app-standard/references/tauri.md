@@ -4,7 +4,7 @@
 
 ## 版本配套
 
-官方 Updating Dependencies 当前说明：`@tauri-apps/api` 与 Rust `tauri` 保持相同 minor（含 major）；官方插件 JS/Rust 配套保持相同完整版本。`@tauri-apps/cli` 对应 CLI；core、build、CLI、macros 独立发版，不要求所有数字相等。每次升级重新核验该政策与例外。[^https://v2.tauri.app/develop/updating-dependencies]
+官方 Updating Dependencies 当前说明：`@tauri-apps/api` 与 Rust `tauri` 保持相同 minor（含 major）；官方插件 JS/Rust 配套保持相同完整版本。`@tauri-apps/cli` 对应 CLI；core、build、CLI、macros 独立发版，不要求所有数字相等。每次升级重新核验该政策与例外。[Tauri 依赖配对](https://v2.tauri.app/develop/updating-dependencies)
 
 - 同时读 Cargo.toml/Cargo.lock、JS manifest/锁文件、Rust toolchain、项目所用插件。
 - 把 npm 声明范围、Cargo 声明范围与锁定解析值分开。检查 workspace 继承、同名多版本、git/path override 与目标平台条件依赖。
@@ -21,7 +21,7 @@
 
 ## 自动更新
 
-Tauri updater 的更新签名不能关闭；更新公钥、私钥与 OS 代码签名是不同信任层。`bundle.createUpdaterArtifacts` 控制产物生成；在使用官方 action 时还需核验它实际收集和上传的文件。[^https://v2.tauri.app/plugin/updater/]
+Tauri updater 的更新签名不能关闭；更新公钥、私钥与 OS 代码签名是不同信任层。`bundle.createUpdaterArtifacts` 控制产物生成；在使用官方 action 时还需核验它实际收集和上传的文件。[Tauri 更新器](https://v2.tauri.app/plugin/updater/)
 
 - 在 app 初始化 updater 插件，核验 capability、endpoint HTTPS、pubkey 内容和更新 UI。
 - 静态 JSON 核验 `version`、`platforms[os-arch].url`、`signature`；signature 是 `.sig` 内容，不是链接。检查所有已列平台，不只本机平台。
@@ -43,4 +43,4 @@ Tauri updater 的更新签名不能关闭；更新公钥、私钥与 OS 代码�
 
 `audit.mjs` 在线模式读取 `tauri-apps/plugins-workspace` 分支 `v2` 的 `plugins/<name>/CHANGELOG.md`，截取 `(已解析版, 最新版]` 的段落并分类（breaking / security / feature）。Rust crate 与 JS 包版本不一致是 P0（运行时才失败，通常表现为缺命令）。
 
-官方 GitHub pipeline 可作为参数来源，不作为永不过期模板；它的 releaseDraft=true 是正常草稿阶段。[^https://v2.tauri.app/distribute/pipelines/github]
+官方 GitHub pipeline 可作为参数来源，不作为永不过期模板；它的 releaseDraft=true 是正常草稿阶段。[Tauri GitHub Actions 指南](https://v2.tauri.app/distribute/pipelines/github)

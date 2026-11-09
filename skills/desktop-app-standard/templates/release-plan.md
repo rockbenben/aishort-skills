@@ -12,18 +12,19 @@
 
 ## Jobs 与权限
 
-1. validate：contents:read；断言 tag/manifest 版本、目标 commit、冻结锁文件、执行现有测试。
-2. build：needs validate；矩阵逐平台构建；对可信 release 源注入最小签名凭证，打包后验签；不同架构产物唯一命名。
+1. validate 使用只读权限，核对 tag、应用版本和实际检出的提交。用锁文件安装，检查技能目标 major，在该提交执行测试。
+2. build 从 validate 取得提交 SHA，矩阵检出该提交逐平台构建。对可信 release 源注入最小签名凭证，打包后验签；不同架构产物唯一命名。
 3. aggregate：needs 全部成功的 build；下载和检查资产，合并 updater 平台/架构元数据，计算最终散列。
 4. stage：仅此处所需 contents:write；创建/更新同一草稿、上传全部资产；需要时生成 provenance/SBOM。
-5. publish：needs 验收；受保护 environment 或等价批准；单一 job 发布；禁止矩阵提前公开。
+5. publish 在草稿核验通过后按仓库并发组排队，再核对 tag 指向。稳定新版取得 latest，已有更高稳定版时将旧 tag 公开为历史 release。
 6. post-release：只读验证 tag、feed、匿名资产可下载、hash/签名、N→N+1 客户端。若测试需公开影响/付费资源先获授权。
 
 ## 栈差异
 
-- Tauri：核验 tauri-action 的 projectPath/args/releaseDraft/更新 manifest 生成选项，更新签名环境变量、所有平台 `.sig` 与 payload；不要让一个矩阵 job 的 latest.json 覆盖另一个。
-- Electron-builder：打包器 publish 与独立发布器只选明确的责任边界；常见做法先 `--publish never` 再统一上传。核验 provider 生成的 yml、blockmap、Windows NSIS、macOS dmg+zip、Linux target；Forge 项目使用对应发布链，不照搬 builder 参数。
-- `uses:` 一律大版本标签（house style，不钉 SHA；要更紧钉精确版本）；先核验当前 runner/runtime 与 Action 最新 major 再选版本，不用本文件中的虚构 pin。
+- Tauri：Windows NSIS（`updaterJsonPreferNsis: true`），macOS dmg + 更新载体 `.app.tar.gz` (.sig)，Linux AppImage + deb + rpm。核验 tauri-action 的 projectPath/args/releaseDraft/更新 manifest 生成选项，更新签名环境变量、所有平台 `.sig` 与 payload；不要让一个矩阵 job 的 latest.json 覆盖另一个。
+- Electron-builder：Windows NSIS，macOS dmg + zip（MacUpdater 必须），Linux AppImage + deb + rpm。打包器 publish 与独立发布器只选明确的责任边界；常见做法先 `--publish never` 再统一上传。核验 provider 生成的 yml、blockmap、各平台 target；Forge 项目使用对应发布链，不照搬 builder 参数。
+- WPF / .NET 原生桌面：Windows 推荐「三轨分发矩阵」（1. 免 UAC Inno Setup 6 / NSIS 安装包 + 2. 自包含便携 Zip + 3. 框架依赖精简 Zip），按 `wpf-desktop` 的 `project-setup.md` 与 `github-actions.md` 执行。
+- 生成工作流时先核对 Action 的稳定 release 与 runner 要求。新项目默认大版本标签，已有项目沿用其 pin 策略。
 
 ## 生成后必须检查
 

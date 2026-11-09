@@ -65,14 +65,14 @@ clawhub install html-shot
 
 ### [wpf-desktop](skills/wpf-desktop/) —— .NET 上的 WPF 桌面应用
 
-用 WPF 构建、调试和发布**原生** Windows 桌面工具（托盘程序、单文件 `.exe` 便携版）—— 不掺 web 技术栈。讲清了哪些依赖值得加（多数不值得）、为什么发布设置该写在 `pubxml` 而不是 `csproj`、WPF 默认会做错的窗口行为（DPI 感知、深色标题栏、打开时的白闪），以及带 SHA256 校验和、artifact attestation 和 winget 提交的标签触发式 GitHub Actions 发版流程。价值在那份按症状写的坑清单，每条都是自己撞过而不是抄来的：长文案下控件被整个裁掉、点不着，一次库调用多花约 770 ms 启动时间，还有把"有时就是不行"变成可执行结论的探针 —— 多语言与 DPI 下的离屏截图扫描、相位计时器、像素采样，以及从进程外面驱动界面。
+只给 WPF 项目时，全面检查 SDK、NuGet、启动、窗口、DPI、托盘和发布配置，并修复可验证的问题。新建或整体升级对齐 **.NET 10**。局部修复检查受影响路径，只做必要的配套升级。只读评估交付发现与证据。
 
 ```bash
 clawhub install wpf-desktop
 ```
 
 - **需要**：Windows 上的 .NET 10 SDK；发版流水线需要 GitHub Actions。
-- **语言**：`SKILL.md` 是英文，后面的四份参考文档是**中文**。代理靠症状标题两条路都能路由，但不读中文的人只能拿到索引，读不到正文。
+- **语言**：英文入口，中文起手指南、依赖升级、故障排查和发布参考。
 - **参考**：[`SKILL.md`](skills/wpf-desktop/SKILL.md)
 
 ### [nextjs-to-tauri](skills/nextjs-to-tauri/) —— Next.js 16 → Tauri 2 桌面应用
@@ -101,7 +101,7 @@ clawhub install nextjs-to-electron
 
 **建**：这套 house style 以十个短章节 + 随之而来的 workflow 模板的形式交付。最要紧的几条：六个目标（Windows/macOS/Linux × x64/arm64）、npm 且锁文件是唯一事实来源、Action 钉大版本标签（要更紧就钉精确版本，绝不钉完整 SHA）、不装 Dependabot、git tag 是唯一版本号、草稿 → 校验 → 审批 → 发布、必须内置 updater、公开后再签名、winget 清单归 winget-manifests 仓管而不是发布仓。
 
-**升**：把它指向一个已有的应用，它会读上游发布说明、逐条比对你自己的源码，产出按优先级排好的"该做什么"清单 —— 你暴露在哪些破坏性变更上、哪些功能值得跟进、哪些版本差会静默出事。它也覆盖 **CI 与发版链路**：钉住的 Actions（对着各 action 实际发布的 major 比）以及那些**悄悄**失效的发版套路 —— 没人发布的草稿、没人上传的 updater manifest、GitHub 没动的 `latest` 指针。每条结论都带着能证明它的文件与行号。
+只给项目时，全面检查版本、安全配置、性能、打包和更新链路，并修复可验证的问题。新建或整体升级按技能的[目标大版本表](skills/desktop-app-standard/references/version-targets.json)更新依赖及锁文件。局部修复只做必要的配套升级。只读评估交付发现与证据。
 
 符合 house style 的发现按 `notice` 报，不计入 P0/P1/P2；已经做过的取舍写进 `.desktop-policy.json` 的 `deviations`（带 reason 与 revisitWhen），此后那条发现按"已接受"处理，不再每周来烦你。
 
@@ -129,3 +129,12 @@ assets/               # 仓库社交预览图 + html-shot 首屏图（HTML 源�
 scripts/              # validate-skills.mjs —— CI 卡发布用的 frontmatter、打包文件与体积检查
 .github/workflows/    # CI：校验、跑 md-web / html-shot / desktop-app-standard 的测试，然后在 push 时把变动的技能自动发布到 ClawHub
 ```
+
+## 经验回传与维护
+
+只回传能改变后续项目判断或操作的经验。写入前说明触发条件、现有指导的具体缺口，以及应修改的模板、检查、测试或参考页；缺少可复用增量时，本次回传可以为空。
+
+- 优先修正已有落点。同一决策只保留一处指导，已有模板或测试承接的修复无需再追加项目经过。
+- 项目验收流水、测试总数、一次性耗时和逐次版本快照留在源项目。需要溯源时仅保留项目名与证据路径。
+- `VALIDATION.md` 按能力维护验证方式、证据入口和环境边界。合并更新同一行，区分模拟、实机与尚待验证的范围。
+- `SKILL.md` 保留通用任务入口。协议、平台或故障特有的方法放在对应参考小节，按任务读取。

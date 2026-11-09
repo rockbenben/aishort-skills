@@ -1,6 +1,6 @@
 ---
 name: nextjs-to-electron
-version: 1.1.8
+version: 1.1.9
 description: Use when packaging a Next.js static export as a Windows Electron app, notably offline/intranet boxes with no WebView2. Triggers on Electron 桌面版 / 打包成 exe / package Next.js as an Electron desktop app / wrap a Next.js app in Electron.
 
 metadata:

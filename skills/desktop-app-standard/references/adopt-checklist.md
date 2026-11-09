@@ -1,24 +1,24 @@
-# Adopt checklist — 快照（核验于 2026-10-28，Electron 45.1.0 / Tauri 2.12.5）
+# Adopt checklist — 快照（核验于 2026-11-03，Electron 45.2.1 / Tauri 2.12.5）
 
 > **这是带日期的快照，不是当前事实。** 使用前用 `audit.mjs`（在线）重新核验最新版本和 release notes；
-> 版本已前进时，以在线报告的 `changes` / 插件 CHANGELOG 段落为准，并把本文件更新为新的快照。
+> 版本已前进时，按[本次升级流程](upgrade-dependencies.md)在目标应用中落实新版本。下表用于识别跨过这些版本时需要迁移的 API。
 > 内容取自上游 release notes 原文，每条附 PR 链接，便于复查。
 
-## Toolchain snapshot (2026-10-28)
+## Toolchain snapshot (2026-11-03)
 
 | Package | npm `latest` | Notes |
 |---|---|---|
-| `electron` | `45.1.0` | Chromium `156.0.8078.49` · Node `24.22.1` · V8 `15.6`；`engines` >=22.12 |
+| `electron` | `45.2.1` | Chromium `156.0.8078.75` · Node `24.22.1` · V8 `15.6.75.25`；`engines` >=22.12.0；`latest` 与 `45-x-y` 同指 `45.2.1` |
 | `electron-builder` | `26.18.0` | `v26` tag points at `26.18.1`（GitHub 同日发布），`latest` 仍落后一个 patch；`next` 是 27.0.0-alpha，不作为 stable 目标 |
-| `electron-updater` | `6.8.11` | `v26` tag points at `6.8.12`；安装以 `latest` 为准，升级时看 `v26` 与 release notes |
+| `electron-updater` | `6.8.11` | 当时同一稳定线的 v26 标签已指向补丁 6.8.12。 |
 | `@electron/rebuild` | `4.2.1` | 用这个包；旧名 `electron-rebuild` 已弃用。electron-builder 26.18.0 已依赖 4.2.1 |
 | `@electron-forge/cli` | `8.0.1` | 只给已有 Forge 项目；新应用仍用 electron-builder |
 | `@electron/fuses` | `2.1.3` | 可选；启用后要在实际打包产物上验证 |
 
-- 安装从 npm `latest` 取 `electron` / `electron-builder` / `electron-updater`；下 pin 前先跑 `npm view <pkg> dist-tags version engines`。`vNN` 标签可能比 `latest` 早一个 patch；要最新稳定补丁就装 `@vNN`，否则等 `latest` 追平。审计会把 GitHub 更新的 release 标出来。
+- 这些是当时的 npm 标签。安装时以[当前技能目标](version-targets.json)为准，审计分别报告上游稳定参考和指定 major 内已发布的稳定目标。
 - 安装后显式跑 `npx install-electron`（Yarn：`yarn run install-electron`）；Electron 42+ 不再有 postinstall 下载。
 - 原生模块用 `@electron/rebuild` 按目标架构 rebuild，不要再用 `electron-rebuild`。
-- `electron-builder` 留在 26.x stable；`next`（27 alpha）和 `electron-updater` 的 `next`（7 alpha）不用于稳定应用。
+- 快照中 builder 和 updater 的 next 标签当时均为 alpha。每次升级重新查询稳定渠道。
 
 ## Electron
 
@@ -26,14 +26,14 @@
 
 | Change | What it means for your app |
 |---|---|
-| Sandboxed preload scripts lose the `events`, `timers`, `url` modules and the `Buffer`, `setImmediate`, `clearImmediate` globals | A sandboxed `preload.js` that uses `Buffer` now throws. Polyfill it, or run that preload unsandboxed. ([#54048](https://github.com/electron/electron/pull/54048)) |
+| Sandboxed preload scripts lose the `events`, `timers`, `url` modules and the `Buffer`, `setImmediate`, `clearImmediate` globals | Update affected imports or move privileged work into the main process behind a narrow IPC handler. ([#54048](https://github.com/electron/electron/pull/54048)) |
 | `safeStorage`'s **synchronous** methods are deprecated, removal in Electron 46 | `isEncryptionAvailable`/`encryptString`/`decryptString` still work, but `decryptStringSync` et al. go away next major. Move to the async API now. (No PR link in the release notes.) |
 | 32-bit builds removed (Windows `ia32`, Linux `armv7l`) | Only `x64`/`arm64` are published. A 32-bit target is no longer buildable, at any version. ([#51816](https://github.com/electron/electron/pull/51816)) |
 | `contentTracing.enableHeapProfiling()` removed | Chromium dropped the memlog backend. Use the `nativeHeapProfiling` option on `contentTracing.startRecording()`. The companion change landed as [#54863](https://github.com/electron/electron/pull/54863). |
 | Screen/window/tab capture is reported to `setPermissionRequestHandler` as **`display-capture`**, not `media` | A handler that allows only `media` silently kills screen sharing. Allow both. ([#52824](https://github.com/electron/electron/pull/52824)) |
 | `document.requestStorageAccessFor` is disabled by default in Chromium | Restore with the `enableBlinkFeatures: "RequestStorageAccessFor"` web preference — but it is on the way out. |
 | ASAR: `fs.open` on a file **inside** the archive no longer extracts a temp copy | The descriptor only identifies the entry; code that reads the raw descriptor (native addons, `child_process` stdio, `net.Socket({fd})`, `respondWithFile()`) fails with `EBADF`. Write flags now fail with `EACCES` instead of silently writing to a temp copy. |
-| `window.open()` children whose `sandbox` state differs from the opener now get their **own process**, with no opener relationship | If you rely on sharing an unsandboxed opener's process, set `sandbox: false` in `setWindowOpenHandler`. ([#52472](https://github.com/electron/electron/pull/52472)) |
+| `window.open()` children whose sandbox state differs from the opener get their own process without an opener relationship | Keep child windows sandboxed and test any flow that depended on the opener. ([#52472](https://github.com/electron/electron/pull/52472)) |
 | `nodeIntegrationInWorker` semantics tightened | A `Worker` created from an `<iframe>` no longer inherits Node integration when the iframe has none. |
 | `chrome-extension://` documents no longer receive the window's preload script | Only top-level frames and DevTools front-ends get it; an extension frame in a normal page now follows `nodeIntegrationInSubFrames`. |
 | `app.setLoginItemSettings()` — `openAsHidden` removed | Also removed from `app.getLoginItemSettings()`'s return value. ([#52351](https://github.com/electron/electron/pull/52351)) |
@@ -52,13 +52,23 @@
 | `select-client-certificate` on `net.request` / `net.fetch` | Your server asks for a client certificate; requests used to fail with `ERR_SSL_CLIENT_AUTH_CERT_NEEDED`. ([#52162](https://github.com/electron/electron/pull/52162)) |
 | `initiatorOrigin` on webRequest / protocol-handler requests | You need to know which origin initiated a request. ([#53700](https://github.com/electron/electron/pull/53700)) |
 
-### v45.1.0 — current stable (patch line)
+### v45.1.0 — the previous minor
 
 | Change | What it means for your app |
 |---|---|
 | `session.registerPreloadScript` accepts `matches`, `excludeMatches`, `includeGlobs`, `excludeGlobs`, `matchOriginAsFallback` | Scope preload injection by URL/origin instead of registering one broad script. Verify redirect/final-URL behavior in your app. ([#55181](https://github.com/electron/electron/pull/55181)) |
 | Chromium `156.0.8078.49`, Node `24.22.1` | Patch-level stack refresh; rebuild native modules and re-run the OS/arch floor checks. |
 | ASAR, extension-service-worker and Linux D-Bus fixes | Re-test apps that read packed files through raw fds, load MV3 extensions, or call D-Bus; see the release notes for the exact fixes. ([v45.1.0](https://github.com/electron/electron/releases/tag/v45.1.0)) |
+
+### v45.2.0 / v45.2.1 — the current minor line
+
+| Change | What it means for your app |
+|---|---|
+| `Menu.setHighlightColors()` sets menu highlight colors on Windows | Custom menu highlight colors no longer need a native workaround. ([#55493](https://github.com/electron/electron/pull/55493)) |
+| Extensions get `chrome.storage.sync` | It behaves as a **second local storage area** under Chrome's sync quotas — there is no cross-device sync, so an MV3 extension that assumed real sync still has none. ([#55253](https://github.com/electron/electron/pull/55253)) |
+| `net.fetch()` is faster without a body, and for repeated `file:` URLs | Each has backports into the other supported lines (#55446 also in 43/44/46, #55459 also in 44/46) — a perf-only reason to take the line. ([#55446](https://github.com/electron/electron/pull/55446), [#55459](https://github.com/electron/electron/pull/55459)) |
+| DevTools "Save" reuses the previously chosen folder; fractional opacity in `window.open()` feature strings is no longer truncated; `webContents.adjustSelection()` honours `end` | Behavior fixes that only show up in a packaged app. ([#55485](https://github.com/electron/electron/pull/55485), [#55499](https://github.com/electron/electron/pull/55499), [#55462](https://github.com/electron/electron/pull/55462)) |
+| v45.2.1 moves Chromium to `156.0.8078.75` and backports upstream Chromium fixes | **A supported stable line only maintains its newest minor** — an app pinned to `45.1.0` is off the maintained minor even though 45 is still supported. ([#55419](https://github.com/electron/electron/pull/55419), [#55523](https://github.com/electron/electron/pull/55523), [v45.2.1](https://github.com/electron/electron/releases/tag/v45.2.1)) |
 
 ### Also in 45.x (lower-risk features)
 
@@ -77,12 +87,13 @@
 
 ### Electron — standing facts
 
-- **Stack at v45.1.0:** Chromium `156.0.8078.49`, Node `24.22.1`, V8 `15.6.75.19`.
+- **Stack at v45.2.1:** Chromium `156.0.8078.75`, Node `24.22.1`, V8 `15.6.75.25`.
   A major bump moves all three — re-read your `engines` and your native deps.
 - **Support window: the latest three majors.** At this snapshot the supported
   majors are 45 / 44 / 43; v45.0.0's `## Notices` section announces "End of
   Support for 42.x.y". 43 drops when 46 ships — that is a deadline for
-  shipping patches, not a note.
+  shipping patches, not a note. The official schedule puts 45's EOL at
+  2027-04-27, 44's at 2027-03-02, 43's at 2027-01-05.
 - **Since Electron 42 the package has no `postinstall`.** The runtime is
   downloaded the first time something runs it, so `npm ci` is fast and
   quiet and the first launch pauses for ~100 MB. In CI run
@@ -92,7 +103,27 @@
   45.x patches. For `electron-builder` / `electron-updater`, the repo also
   publishes `v26` (latest 26.x / 6.8.x patch) and `next` (27 / 7 alpha);
   `latest` can lag `v26` by a patch. Check `npm view <pkg> dist-tags` and
-  prefer `latest` unless you deliberately need the tagged patch.
+  install the registry-confirmed stable version for the major declared in the skill's target table.
+
+### Electron 46 — scheduled, not actionable yet
+
+Heads-up only: a stable app does not act on prereleases. Dates come from the
+official schedule and are provisional — re-read them each run.
+
+- **Where it is now:** npm `alpha` = `46.0.0-alpha.5` (2026-11-02). Scheduled
+  beta 2026-12-03, scheduled stable **2027-01-05**.
+- **The stack moves under it:** the schedule targets Chromium **160** and
+  embedded Node **26.13.0** for 46.0.0 (45.x is Chromium 156 / Node 24.22). The
+  alpha in progress is already on Chromium 158 / V8 15.8, so the exact numbers
+  are not settled — but the embedded Node jumping 24 → 26 is, and that means a
+  new ABI: plan an `@electron/rebuild` pass on every target arch, and re-check
+  `engines` against the tooling you install alongside it.
+- **Support window closes on the same day:** 43's EOL is 2027-01-05, i.e. the
+  scheduled 46 stable date. Any patch you still owe a 43-based build is due
+  before that release.
+- **The removal already announced in 45's notes lands here:** `safeStorage`'s
+  synchronous methods are deprecated in 45 and removed in 46. Move to the
+  async API on the current release rather than treating it as a 46 task.
 
 ---
 
@@ -137,13 +168,4 @@
 
 ## Upgrading safely, both frameworks
 
-1. **Skew first.** Tauri: crate vs CLI, crate vs JS package per plugin.
-   Electron: `electron` vs `electron-builder`, and your `engines` field.
-2. **One breaking change per commit.** A revert is a commit, not a bisect.
-3. **Re-read the app's own version gates.** The desktop layer usually has a
-   version check somewhere ("if Electron >= 40 …"); a major bump usually
-   invalidates it.
-4. **Test the update path, not just the build.** Install N, ship N+1 through the
-   real feed on every OS you publish (house style: Windows/macOS/Linux, x64+arm64).
-5. **Run the audit again afterwards.** The P0 list for the new version should
-   be empty. If it is not, the upgrade did not land.
+按[依赖升级流程](upgrade-dependencies.md)更新实际项目。跨越上述版本时，只迁移项目用到的 API。涉及应用内更新时，另按[发布流程](release-flow.md)从已安装的旧版验收。

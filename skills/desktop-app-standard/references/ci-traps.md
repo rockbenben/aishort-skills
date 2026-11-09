@@ -7,6 +7,7 @@
 - 已知取舍（如未签名）：在 `.desktop-policy.json` 的 `deviations` 里写 `{ "rule": "<发现 id>", "reason", "revisitWhen" }`，该发现即标为 `accepted`，单列在“已接受的偏离”，不计入 P0/P1/P2；缺 reason 或 revisitWhen 的不予接受，另报 `policy-deviation-undocumented`。
 - `notice` = 符合 house style、只值得看一眼的提示（不计入 P0/P1/P2），如 `action-moving-ref`、`yarn-classic`。
 - 注释会被剥离：`# gh release create collides` 这类说明文字不会被当成步骤。
+- `bash-script-on-windows-runner` 按 job 核对 Windows runner、Bash 语法与 shell 声明；同文件其他 job 的 `shell: bash` 无法覆盖当前 job。矩阵与条件步骤仍需人工确认实际执行路径。
 - `tauri-linux-deps` 只在**同一个 job** 内既有 Ubuntu runner、又有 Tauri 构建步骤时才报；Ubuntu 上只跑 `cargo audit` 的 security job 不再误报。`runs-on: ${{ matrix.os }}` 的矩阵 job 仍需人工读 job。
 - `tagname-from-ref-unasserted` 与 `version-single-source` 共用 `versionAsserted` 的标记检测；它不是 YAML 解析器。显式写了断言也要包含可识别标记（如 `ref_type`、`GITHUB_REF_NAME#v`、`npm pkg set version`、`version mismatch`），否则仍会被报。建议在 release job 第一步用 `version mismatch:` 报错，并把 job 限定 `github.ref_type == 'tag'`；标记只是让启发式看见，不替代断言。`tagname-from-ref-unasserted` 只在**出现 `tagName` 的那个 job 内**找标记（别的 job 写了 `ref_type` 不算）；`version-single-source` 是文件级判断。
 

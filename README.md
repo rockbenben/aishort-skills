@@ -65,14 +65,14 @@ clawhub install html-shot
 
 ### [wpf-desktop](skills/wpf-desktop/) — WPF desktop apps on .NET
 
-Build, debug and ship a **native** Windows desktop tool (tray utility, portable single-file `.exe`) in WPF — no web stack involved. Covers which dependencies are worth adding (most are not), why publish settings belong in a `pubxml` and never the `csproj`, the window behaviour WPF gets wrong by default (DPI awareness, dark title bar, the white flash on open), and a tag-triggered GitHub Actions release with SHA256 sums, artifact attestation and winget submission. The value is the pitfall list written symptom-first, each one field-tested rather than quoted: layout containers that silently drop controls under long translations, a first library call that costs ~770 ms of startup, and the probes that turn "sometimes it doesn't work" into a score you can act on — offscreen screenshot sweeps across languages and DPI, phase timers, pixel sampling, and driving the UI from outside the process.
+Review a WPF repository's SDK, packages, startup, windows, DPI, tray behavior and publish profiles, then fix verified issues. New apps and whole-project upgrades target **.NET 10**. For a specific fault, check the affected path and upgrade the dependencies needed to fix it. A read-only assessment reports findings and evidence.
 
 ```bash
 clawhub install wpf-desktop
 ```
 
 - **Needs:** .NET 10 SDK on Windows; GitHub Actions for the release pipeline.
-- **Language:** `SKILL.md` is English; the four reference files behind it are **Chinese**. Agents route by the symptom headings either way, but a human who does not read Chinese gets the index rather than the write-ups.
+- **Language:** English entry point with Chinese setup, dependency upgrade, troubleshooting and release guides.
 - **Reference:** [`SKILL.md`](skills/wpf-desktop/SKILL.md)
 
 ### [nextjs-to-tauri](skills/nextjs-to-tauri/) — Next.js 16 → Tauri 2 desktop app
@@ -101,7 +101,7 @@ clawhub install nextjs-to-electron
 
 **Building:** the skill ships that house style as ten short sections plus the workflow templates it implies. The ones that bite: six targets (Windows/macOS/Linux × x64/arm64), npm with the lockfile as the only source of truth, Actions pinned by major tag (an exact version when you need to be tighter, never a full SHA), no Dependabot, the git tag as the single version, draft → verify → approve → publish, an updater built in, signing once the release is public, and the winget manifest owned by `winget-manifests` rather than by your repo.
 
-**Upgrading:** point it at an existing app and it reads the upstream release notes, matches every entry against *your* source, and returns a ranked list of what to actually do — the breaking changes you are exposed to, the features worth adopting, the version skew that breaks silently. It covers the **CI and release path** too: the pinned Actions (compared against the major each action actually publishes) and the release-flow patterns that fail *quietly* — a draft nobody publishes, an updater manifest that was never uploaded, a `latest` pointer GitHub did not move. Every finding carries the file and line that proves it.
+A repository-wide review checks versions, security settings, performance, packaging and updates, then addresses demonstrated issues. New apps and whole-project upgrades follow the skill’s [declared major versions](skills/desktop-app-standard/references/version-targets.json). Focused fixes change the dependencies they require. Read-only assessments report gaps and evidence.
 
 Findings that match the house style come back as `notice` rather than as P0/P1/P2, and a decision you have already made goes into `.desktop-policy.json` as a `deviation` with a reason and a revisit condition — after which that finding counts as accepted instead of nagging you every week.
 
@@ -129,3 +129,12 @@ assets/               # Repo social preview + the html-shot hero (HTML source an
 scripts/              # validate-skills.mjs — the frontmatter, bundle membership and size checks CI gates publishing on
 .github/workflows/    # CI: validates, tests md-web, html-shot and desktop-app-standard, then auto-publishes changed skills to ClawHub on push
 ```
+
+## Experience feedback and maintenance
+
+Keep experience that changes a decision or action in a later project. Before adding it, identify the trigger, the concrete gap in existing guidance, and the template, check, test or reference to update. A review may produce no skill changes when there is no reusable addition.
+
+- Update the existing resource first. Keep guidance for the same decision in one place, and avoid repeating project history already addressed by a template or test.
+- Keep project execution logs, test totals, individual timings and successive version snapshots in the source project. Retain only the project name and evidence path when provenance is needed.
+- Maintain `VALIDATION.md` by capability, with the verification method, evidence location and environment limits. Update the existing row and distinguish simulation, device testing and pending validation.
+- Keep general task routing in `SKILL.md`. Put protocol, platform and fault-specific methods in the relevant reference section for use when the task calls for them.

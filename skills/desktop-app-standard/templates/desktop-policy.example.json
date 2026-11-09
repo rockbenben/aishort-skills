@@ -1,9 +1,10 @@
 {
   "schemaVersion": 2,
   "status": "house-style-default",
-  "verifiedOn": "2026-10-27",
+  "verifiedOn": "2026-11-08",
   "framework": "tauri | electron",
   "channel": "stable",
+  "dependencyTargets": "Read references/version-targets.json from the installed skill on every build or upgrade. Resolve stable versions within those majors.",
   "platforms": ["windows-x64", "windows-arm64", "macos-arm64", "macos-x64", "linux-x64", "linux-arm64"],
   "packageManager": "npm (npm ci in CI; existing Yarn/pnpm repos keep their lockfile, Yarn 1 uses --frozen-lockfile)",
   "node": "Active LTS (resolve against the nodejs/Release schedule; audit.mjs reports drift)",
@@ -23,11 +24,8 @@
   },
   "versionSource": "git tag vX.Y.Z; package.json (and tauri.conf version '../package.json') asserted equal",
   "release": "single draft → verify → protected-environment approval → publish + make_latest → anonymous feed check",
-  "actionPins": "major tags (resolve the current major with audit.mjs suggestedPin); exact version when tighter is needed; never full SHA",
+  "actionPins": "major tags by default. Keep a repository requirement for exact versions or commit SHAs when updating the action.",
   "immutableReleases": "enabled once the pipeline is stable",
-  "deviations": [
-    { "rule": "platforms", "value": ["windows-x64", "macos-arm64"], "reason": "example: no arm64 test hardware yet", "revisitWhen": "first arm64 user report or 2027-01-01" },
-    { "rule": "windows-unsigned", "reason": "example: certificate not issued yet; SmartScreen note in release body", "revisitWhen": "Azure Artifact Signing approved" }
-  ],
+  "deviations": [],
   "notes": "audit.mjs reads `platforms` and `deviations[]` only. rule == 'platforms' narrows the platform matrix; rule == <finding id> (e.g. windows-unsigned) moves that finding to 'accepted' (not counted in P0/P1/P2). A deviation without reason + revisitWhen is reported as drift. Everything else is guidance for the agent."
 }

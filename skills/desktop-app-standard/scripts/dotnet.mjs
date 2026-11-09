@@ -1,5 +1,5 @@
 // .NET runtime/SDK lifecycle facts. Pure: no filesystem, network or dotnet invocation.
-import { stripComments } from './ci-traps.mjs';
+import { jobBlocks, stripComments } from './ci-traps.mjs';
 
 export const DOTNET_METADATA_HOST = 'builds.dotnet.microsoft.com';
 export const metadataUrl = channel =>
@@ -152,6 +152,7 @@ export function analyzeDotnet({ projects = [], globalJsons = [], metadata = {}, 
       if (!c.tfms.includes(t.tfm)) c.tfms.push(t.tfm);
       channels.set(t.channel, c);
     }
+    for (const t of tfms.filter(t => t.kind === 'unknown')) incomplete.push(`${p.file}: 无法识别 TFM ${t.tfm}；支持期未知。`);
     if (!tfms.length && !(p.unresolved ?? []).length) incomplete.push(`.NET 项目 ${p.file}: 未找到 TargetFramework/TargetFrameworks（旧式项目？）`);
     if ((p.unresolved ?? []).length) incomplete.push(`.NET 项目 ${p.file}: TFM 含 MSBuild 属性 ${p.unresolved.join(', ')}，静态扫描无法求值；用 \`dotnet msbuild -getProperty:TargetFramework\` 核验。`);
     projectFacts.push({ file: p.file, tfms, unresolved: p.unresolved ?? [], globalJson: p.globalJson ?? null, propsFile: p.propsFile ?? null });
@@ -219,10 +220,17 @@ export function analyzeDotnet({ projects = [], globalJsons = [], metadata = {}, 
     for (const p of projects.filter(x => x.globalJson === g.file)) {
       for (const t of (p.tfms ?? []).map(tfmInfo)) {
         if (t.kind !== 'runtime') continue;
-        if (t.major > pin.major || (t.major === pin.major && t.minor > pin.minor))
+        if (t.major < pin.major || (t.major === pin.major && t.minor <= pin.minor)) continue;
+        const policy = (g.rollForward || 'patch').toLowerCase();
+        const canCross = ['major', 'latestmajor'].includes(policy)
+          || (t.major === pin.major && ['minor', 'latestminor'].includes(policy));
+        if (canCross) {
+          warnings.push(`${p.file}: ${g.file} 的 ${g.rollForward} 允许选择可编译 ${t.tfm} 的已安装 SDK。在构建目录运行 dotnet --version 确认。`);
+        } else {
           framework.push({ id: 'dotnet-sdk-cannot-target', severity: 'P0', confidence: 'confirmed', file: p.file, line: null,
             detail: `项目 TargetFramework 是 ${t.tfm}，但最近的 ${g.file} 把 SDK 钉在 ${g.version}（${pin.major}.${pin.minor}）；旧 SDK 不能编译更新的 TFM，构建会失败或落到意外 SDK。`,
             fix: '把 global.json、TargetFramework、setup-dotnet 和发布 profile 作为一次改动同步；.NET SDK 只能 target 同一或更低的 TFM。' });
+        }
       }
     }
     globalFacts.push(fact);
@@ -232,20 +240,33 @@ export function analyzeDotnet({ projects = [], globalJsons = [], metadata = {}, 
 
   for (const w of workflows) {
     const t = stripComments(String(w.text ?? ''));
-    const setup = /uses:\s*actions\/setup-dotnet@([^\s#]+)/.exec(t);
-    const hasGlobalFile = /global-json-file\s*:/.test(t);
-    const hasVersion = /dotnet-version\s*:/.test(t);
-    const hasGlobal = globalJsons.length > 0;
-    const line = lineOf(t, setup?.index);
-    if (setup) {
-      if (hasGlobalFile && hasVersion) ci.push({ id: 'dotnet-version-two-sources', severity: 'P1', confidence: 'heuristic', file: w.file, line,
-        detail: 'setup-dotnet 同时配置 global-json-file 与 dotnet-version：两个 SDK 版本源，升级时必有一处被忘掉（action 会把两者都装上）。', fix: '只保留 global-json-file，让 global.json 一处说了算；删除 dotnet-version。' });
-      else if (hasVersion && !hasGlobalFile && hasGlobal) ci.push({ id: 'dotnet-version-shadows-global-json', severity: 'P1', confidence: 'heuristic', file: w.file, line,
-        detail: 'CI 用 dotnet-version 钉 SDK，但仓库有 global.json：本地与 CI 用了两个版本源，CI 不读 global.json。', fix: '改为 setup-dotnet 的 global-json-file: global.json，删除 dotnet-version。' });
-      else if (!hasGlobalFile && !hasVersion) ci.push({ id: 'dotnet-setup-without-version', severity: 'P2', confidence: 'heuristic', file: w.file, line,
-        detail: 'setup-dotnet 既没有 global-json-file 也没有 dotnet-version：没有明确的 SDK 来源，runner 的预装版本可能被使用。', fix: '配置 global-json-file（有 global.json 时）或 dotnet-version，并只保留一个来源。' });
-    } else if (hasGlobal && projects.length) ci.push({ id: 'dotnet-ci-setup-missing', severity: 'P2', confidence: 'heuristic', file: w.file, line: 1,
-      detail: '仓库有 global.json，但工作流没有 setup-dotnet：CI 依赖 runner 恰好预装了 pin 的 SDK；pin 不在 runner 上时 dotnet 命令会失败。', fix: '加 actions/setup-dotnet，并配置 global-json-file: global.json（不要同时写 dotnet-version）。' });
+    const jobs = jobBlocks(t);
+    for (const job of jobs.length ? jobs : [{ text: t, offset: 0 }]) {
+      const steps = [...job.text.matchAll(/^([ \t]*)- +(?:uses|name|id|if|run|shell|env|with|continue-on-error|timeout-minutes|working-directory):/gm)];
+      let configured = false;
+      for (const [i, step] of steps.entries()) {
+        const block = job.text.slice(step.index, steps[i + 1]?.index);
+        const setup = /\buses:\s*['"]?actions\/setup-dotnet@/.exec(block);
+        if (!setup) continue;
+        configured = true;
+        const line = lineOf(t, job.offset + step.index + setup.index);
+        const hasGlobalFile = /\bglobal-json-file\s*:/.test(block);
+        const hasVersion = /\bdotnet-version\s*:/.test(block);
+        const where = { confidence: 'heuristic', file: w.file, line };
+        if (hasGlobalFile && hasVersion) ci.push({ ...where, id: 'dotnet-version-two-sources', severity: 'P1',
+          detail: '同一 setup-dotnet 步骤同时配置 global-json-file 和 dotnet-version，action 会安装两者。',
+          fix: '核对是否有意测试多个 SDK；单版本构建可保留 global-json-file。' });
+        else if (hasVersion && globalJsons.length) ci.push({ ...where, id: 'dotnet-version-shadows-global-json', severity: 'P1',
+          detail: 'setup-dotnet 指定安装版本，仓库另有 global.json；CLI 仍按运行目录解析 SDK。',
+          fix: '在构建目录运行 dotnet --version；单版本构建可让 setup-dotnet 读取对应的 global.json。' });
+        else if (!hasGlobalFile && !hasVersion) ci.push({ ...where, id: 'dotnet-setup-without-version', severity: 'P2',
+          detail: 'setup-dotnet 没有指定要安装的 SDK 版本或 global.json。', fix: '核对 runner 的 SDK 来源。' });
+      }
+      if (!configured && globalJsons.length && projects.length && /\bdotnet\s+(?:build|test|publish|restore|pack|run|msbuild)\b/i.test(job.text))
+        ci.push({ id: 'dotnet-ci-setup-missing', severity: 'P2', confidence: 'heuristic', file: w.file, line: lineOf(t, job.offset),
+          detail: '该 job 调用 dotnet，未看到 setup-dotnet；SDK 可能由镜像或复用步骤提供。',
+          fix: '核对该 job 的 SDK 来源与构建目录中的 dotnet --version。' });
+    }
   }
 
   const order = { P0: 0, P1: 1, P2: 2, notice: 3 };

@@ -7,16 +7,24 @@ on:
         description: "Skill dir under skills/ to publish (blank = all skills)"
         required: false
         default: ""
+  pull_request:
+    paths: ["skills/**", "scripts/**", ".github/workflows/**"]
   push:
     branches: [main]
     paths:
       - "skills/**"
+      - "scripts/**"
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
 
 # Serialize runs: two overlapping pushes must not publish the same skill from two
 # different SHAs, where the older run can land last and move the registry backwards.
 concurrency:
   group: publish-clawhub
   cancel-in-progress: false
+  queue: max
 
 jobs:
   # Decide which skills to publish: on push, only the ones whose files changed;
@@ -42,6 +50,7 @@ jobs:
           INPUT_SKILL: ${{ github.event.inputs.skill }}
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           set -uo pipefail
           all_skills() {
@@ -49,7 +58,10 @@ jobs:
               -exec test -f '{}/SKILL.md' ';' -print | sed 's#^skills/##'
           }
           base=""
-          if [ "$EVENT" = "workflow_dispatch" ]; then
+          if [ "$EVENT" = "pull_request" ]; then
+            base="$PR_BASE"
+            dirs=""
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
             if [ -n "$INPUT_SKILL" ]; then
               # One skill directory name and nothing else: this value reaches the
               # publish job, and the publish job holds the registry token.
@@ -102,6 +114,9 @@ jobs:
       # fragment, and its lifecycle writes replace the bucket's whole configuration
       # (S3 has no per-rule API). A regression in either is invisible in review and
       # destructive in production, and nothing else in this workflow would notice.
+      - name: Test review regressions
+        run: node --test scripts/review-regressions.test.mjs
+
       - name: Test md-web
         run: |
           node scripts/test-md-web-viewer.mjs
@@ -126,9 +141,10 @@ jobs:
           fi
           npm run test:all
 
-      # desktop-app-standard ships its own dependency-free Node test suite over its
+      # desktop-app-standard has a Node test suite over its
       # scripts (version comparison, lockfile parsing, template self-checks, a mocked
-      # online run, .NET TFM/SDK fixtures). They need no dependencies and no network,
+      # online run, .NET TFM/SDK fixtures). The shared metadata parser uses js-yaml
+      # installed above. The tests need no network,
       # so they are the cheapest guard in this workflow — and without this step
       # nothing would run them.
       - name: Test desktop-app-standard
@@ -136,7 +152,7 @@ jobs:
 
   publish:
     needs: detect
-    if: needs.detect.outputs.skills != '[]'
+    if: github.event_name != 'pull_request' && needs.detect.outputs.skills != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -159,16 +175,18 @@ jobs:
         env:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
 
-      - name: Extract version from SKILL.md
+      - name: Read the validated skill version
         id: version
         env:
-          # Through the environment, never interpolated into the script: an
-          # expression is substituted before the shell parses it, and the publish
-          # job holds the registry token on disk.
           SKILL: ${{ matrix.skill }}
         run: |
-          VERSION=$(grep '^version:' "skills/$SKILL/SKILL.md" | head -1 | sed 's/version:[[:space:]]*//')
-          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          npm install --no-save --no-audit --no-fund js-yaml@4
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { parseSkillMetadata, getSkillVersion } from './scripts/skill-metadata.mjs';
+          const metadata = parseSkillMetadata(fs.readFileSync(`skills/${process.env.SKILL}/SKILL.md`, 'utf8'));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `value=${getSkillVersion(metadata)}\n`);
+          NODE
 
       - name: Publish skill
         env:

@@ -521,3 +521,238 @@ WPF 的 XAML 是懒加载的，某个窗口的 XAML 写错，只要不打开那�
 判据可以机械化：扫全仓库每一个「造出这扇全屏窗」的位置，要求同一文件里、在它之前出现那句开关。只钉生产那一个文件是不够的——没被守住的那条恰好是最坏的那条。开发期自检那一侧的完整修法见 `dev-switches.md`「harness 会自己引爆的四颗雷」。
 
 同一场事故还有另一半，别和这条搅在一起：**跑测试时鼠标不归自己管**。那是同一个根（全局低级钩子 + 闸门 + 拆卸时真的注入按键），判据与修法见 `dev-switches.md`「跑测试会真的接管你这台机器的鼠标」。
+
+
+## 非模态窗口上的 IsCancel="True" 静默失效
+
+症状：在二级窗口（设置、操作历史、关于、预设等）里写了 `<Button Content="取消" IsCancel="True" />`，点击「取消」按钮窗口毫无反应，按键盘 <kbd>Esc</kbd> 窗口也不关闭。
+
+根因：WPF 的 `Button.IsCancel = true` 仅在**模态对话框（`ShowDialog()`）** 中会自动设置 `DialogResult = false` 并关闭窗口。在托盘小工具广泛使用的**非模态窗口（`Show()`）** 中，设置 `DialogResult` 会直接抛出 `InvalidOperationException`；WPF 在非模态下仅负责把 <kbd>Esc</kbd> 键转发给该按钮的 `Click` 事件。若按钮**没有显式绑定 `Click` 事件或 `Command`**，点击和 <kbd>Esc</kbd> 都会**静默失效（完全没有任何操作发生）**。
+
+改法：非模态窗口的取消/关闭按钮不能偷懒，必须显式挂载 `Click="OnCancel"`（后台调用 `Close()`）或绑定 Command：
+
+```xml
+<!-- 错误：非模态窗口下静默失效，关不掉窗口 -->
+<Button Content="取消" IsCancel="True" />
+
+<!-- 正确：显式绑定 Click 或 Command -->
+<Button Content="取消" IsCancel="True" Click="OnCancel" />
+```
+
+```csharp
+private void OnCancel(object sender, RoutedEventArgs e)
+{
+    // 若绑定的 ViewModel 支持未保存改动回滚，取消时需重新从磁盘加载配置
+    if (DataContext is SettingsViewModel vm)
+    {
+        vm.CancelCommand.Execute(null); // 内部执行 _settingsService.Load() 回滚内存改动
+    }
+    Close();
+}
+```
+
+## DI 容器里的窗口注册成单例，关闭后第二次打开必崩
+
+症状：开机后首次打开「设置」或「历史」窗口一切正常，点击右上角 `X` 或「取消」关闭窗口后，再次从托盘菜单或快捷键打开该窗口时，程序直接抛出未捕获异常崩溃：
+`InvalidOperationException: Cannot call Show on a window after it has closed.`
+
+根因：WPF 的 `Window.Close()` 会永久销毁 Win32 原生窗口句柄（HWND），**已被 Closed 的 Window 实例绝不可再次调用 Show**。若在依赖注入（DI）容器中把二级窗口注册为 `AddSingleton<SettingsWindow>()`，关闭后该窗口虽然脱离了可视树，但在 DI 容器中仍然活着；第二次调用 `GetRequiredService<SettingsWindow>()` 拿到的是已销毁 HWND 的死对象，调用 `.Show()` 必崩。
+
+改法：
+1. **主次分离注册**：所有二级窗口在 DI 中**必须注册为 `AddTransient`**，绝不能是 `AddSingleton`。
+2. **防重复实例的打开封装**：
+
+```csharp
+private void OpenWindow<TWindow>() where TWindow : Window
+{
+    if (_host is null) return;
+
+    // 1. 若当前已有活着并显示的实例，直接激活置顶，避免重复开窗
+    var existing = Application.Current.Windows.OfType<TWindow>().FirstOrDefault();
+    if (existing is not null)
+    {
+        if (!existing.IsVisible) existing.Show();
+        WindowEffects.BringToFront(existing);
+        return;
+    }
+
+    // 2. 没有活着的实例，通过 DI 解析新的 Transient 实例并打开
+    var window = _host.Services.GetRequiredService<TWindow>();
+    window.Show();
+}
+```
+
+注意：只有像主面板（`MainWindow`）这种重写了 `OnClosing` 并设为 `e.Cancel = true; Hide();` 的常驻窗口，才允许作为 Singleton 注册。
+
+## 托盘常驻应用的临时导出/物化文件长期堆积
+
+症状：用户打开存储设置发现「拖出临时文件：484.7MB」，应用明明是随手暂存、用完即走的，磁盘却越来越满，点击手动清理也没有任何变化。
+
+根因：
+1. **协议限制**：向 Windows Explorer 或外部软件拖拽文件（OLE `CF_HDROP` 协议）只认本地物理文件路径，内部存储（Blob 库或内存流）必须先物化落盘到临时目录。
+2. **清理死角**：清理逻辑若只放在 `OnStartup`，而托盘软件开机自启常驻后台运行数周不关机，启动清理就永远无法再次触发。
+3. **保留期过长**：拖拽到 Explorer 复制通常几秒内完成，若保守设置了 24 小时过期且无后台轮询，一天内拖出的物料全堆在盘上。
+4. **手动清理存在盲区**：设置面板里的「清理未引用数据」通常只清理了未引用的数据库/对象存储，漏掉了拖出物化临时目录。
+
+改法：
+1. **缩短过期时间**：拖拽临时目录过期阈值从 24 小时缩短至 1 小时，并使用 `IOException` 捕获安全跳过正被其他进程读取的文件。
+2. **常驻后台轮询**：增加 30 分钟后台 `DispatcherTimer` / 周期任务，自动清理过期临时文件。
+3. **退出扫尾与一键联动**：在 `OnExit` 中增加同步轻量清理；设置面板的手动清理按钮一并清空所有未锁定的物化临时文件，界面占用立刻刷新为 `0 B`。
+
+## 双形态窗口在多屏切换时坐标跳跃与越界
+
+症状：在双屏或多屏混合 DPI 环境下，迷你小窗展开成大工作台时，窗口偶尔会跳到另一台屏幕上；或者展开后窗口标题栏超出了屏幕上边界无法拖动。
+
+根因：
+1. 不同形态共用同一组坐标缓存，展开大窗时直接套用迷你窗的左上角坐标，导致大窗口右侧或底部溢出屏幕。
+2. 使用 `SystemParameters.WorkArea` 误取主屏工作区，副屏上的窗口展开时被主屏工作区范围强行纠正，产生跨屏飞跃。
+3. 展开时未基于 `MonitorFromWindow` 重新计算并执行安全边界钳制。
+
+改法：
+1. 按形态分别缓存坐标（如 `_compactPosition` 与 `_workbenchBounds`）。
+2. 尺寸切换前通过 Win32 `MonitorFromWindow` 获取窗口当前所在的实际屏幕工作区。
+3. 扩展尺寸后必须执行 `ClampToWorkArea(window)` 钳制，确保窗口右上角、标题栏永远在屏幕可视安全区内。
+
+## 右键菜单和外壳扩展项显示 Windows 默认白纸图标
+
+症状：应用各窗口在运行时任务栏显示正常、窗口左上角图标也对，但是在 Windows 资源管理器右键扩展菜单项（Shell Context Menu，如「加入暂存」）、发送到菜单（SendTo）、或者未固定的外部快捷方式上，却显示为 Windows 默认的通用白纸程序图标。
+
+根因：Windows Explorer 读取外壳关联命令图标（注册表语法通常为 `Xxx.exe,0` 或直接引用 EXE 路径）时，查找的是 Win32 PE 头资源表里的原生 `RT_GROUP_ICON`（ID 1）。若在 `.csproj` 中漏配了 `<ApplicationIcon>`，即使在 XAML 里通过 pack URI 注入了窗口图标，.NET 编译出的 PE 文件原生资源表仍为空。
+
+改法：在主 App 的 `.csproj` 的根 `<PropertyGroup>` 里显式加入：
+
+```xml
+<ApplicationIcon>Resources\app.ico</ApplicationIcon>
+```
+
+并在 Inno Setup 脚本的 `[Setup]` 段声明 `SetupIconFile=app.ico`（Inno 6.0+ 起弃用 `UninstallIconFile`），确保安装包和外壳注册全部指向真实 PE 图标。
+
+## WindowChrome 自定义标题栏上的按钮点不动（命中测试被吃掉）
+
+症状：为消除 Windows 原生厚重且割裂的默认标题栏（首栏），在窗口上应用了 `WindowChrome`（如 `CaptionHeight="40"`）实现无边框沉浸式顶栏。但嵌入在顶栏中的自定义控件（关闭按钮 `✕`、置顶图钉 `📌`、操作图标按钮、拖拽手柄）点击完全没有反应，鼠标移动上去甚至没有 Hover 状态变化。
+
+根因：`WindowChrome` 默认将 `CaptionHeight` 范围内的整个矩形区域转译为 Win32 原生 `HTCAPTION`（窗口拖拽非客户区）。操作系统捕获了 `HTCAPTION` 消息并接管了拖拽手势，导致 WPF 内部的路由事件系统（`MouseDown`、`MouseEnter`、`Click`）完全被旁路吃掉。
+
+改法：所有需要响应鼠标点击、悬浮或拖拽手势的子元素，必须显式附加 `WindowChrome.IsHitTestVisibleInChrome="True"`。父级 Grid / Border 容器保持不设该属性，控件之间的空白区域仍可原生保留拖拽窗口与双击最大化：
+
+```xml
+<WindowChrome.WindowChrome>
+    <WindowChrome CaptionHeight="40" ResizeBorderThickness="6" CornerRadius="0" GlassFrameThickness="0" UseAeroCaptionButtons="False" />
+</WindowChrome.WindowChrome>
+
+<!-- 顶栏中的交互按钮必须显式声明命中测试穿透 -->
+<Button WindowChrome.IsHitTestVisibleInChrome="True" Click="OnCloseClick" ... />
+```
+
+## 提取文件原生图标卡死 UI 线程并泄漏 GDI 句柄
+
+症状：文件列表或暂存架需要展示每个文件的 Windows 原生图标（真实关联的 Word、Excel、VS Code、PDF 等）。使用 Win32 `SHGetFileInfo(filePath, ...)` 提取图标时，遇到深层网络路径、离线 U 盘、只读受限或大文件时，UI 线程出现明显顿挫甚至数秒无响应；运行数天后程序更可能由于 GDI 句柄耗尽崩溃。
+
+根因：
+1. `SHGetFileInfo` 默认会尝试真实访问磁盘以获取属性，带来同步磁盘/网络 I/O 阻塞；
+2. 提取出来的 Win32 原生 `HICON`（句柄）通过 `Imaging.CreateBitmapSourceFromHIcon` 转换为 WPF 位图后，若未显式调用 `DestroyIcon`，会造成底层 GDI/USER 句柄泄漏（Windows 单进程上限为 10,000 个）。
+
+改法：采用合成虚拟路径并加上标志 `SHGFI_USEFILEATTRIBUTES` 配合 `FILE_ATTRIBUTE_NORMAL`。此标志让 Shell 按提供的文件属性查关联图标，目标文件可以不存在。首次加载图标和 Shell 扩展仍可能耗时，在后台线程查询并缓存结果。在 `finally` 中销毁句柄并 `Freeze()` 缓存位图：
+
+```csharp
+[DllImport("shell32.dll", CharSet = CharSet.Auto)]
+static extern IntPtr SHGetFileInfo(string pszPath, uint dwFileAttributes, ref SHFILEINFO psfi, uint cbFileInfo, uint uFlags);
+
+[DllImport("user32.dll", SetLastError = true)]
+static extern bool DestroyIcon(IntPtr hIcon);
+
+const uint SHGFI_ICON = 0x000000100;
+const uint SHGFI_SMALLICON = 0x000000001;
+const uint SHGFI_USEFILEATTRIBUTES = 0x000000010;
+const uint FILE_ATTRIBUTE_NORMAL = 0x00000080;
+
+private static readonly ConcurrentDictionary<string, ImageSource> _cache = new(StringComparer.OrdinalIgnoreCase);
+
+public static ImageSource GetIconForExtension(string ext)
+{
+    if (string.IsNullOrWhiteSpace(ext)) ext = ".dat";
+    return _cache.GetOrAdd(ext, static extension =>
+    {
+        var shinfo = new SHFILEINFO();
+        IntPtr hImg = SHGetFileInfo("dummy" + extension, FILE_ATTRIBUTE_NORMAL, ref shinfo,
+            (uint)Marshal.SizeOf(shinfo), SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES);
+        if (hImg == IntPtr.Zero || shinfo.hIcon == IntPtr.Zero) return FallbackIcon;
+        try
+        {
+            var bs = Imaging.CreateBitmapSourceFromHIcon(shinfo.hIcon, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+            bs.Freeze(); // 冻结位图以便安全跨线程共享
+            return bs;
+        }
+        finally
+        {
+            DestroyIcon(shinfo.hIcon); // 彻底杜绝 Win32 GDI 句柄泄漏
+        }
+    });
+}
+```
+
+## 全局热键长按疯狂连发与按键穿透（MOD_NOREPEAT 与按键录制盒）
+
+症状：
+1. **长按连发**：用户按住全局热键（如 <kbd>Win</kbd>+<kbd>Alt</kbd>+<kbd>S</kbd>）不松手时，系统按键重复触发，导致浮动小窗疯狂交替开闭闪烁，甚至热键中的字符键（如 S）被当作普通字符打入了当前活动的应用中。
+2. **手动输入体验差**：设置界面用普通的 `TextBox` 让用户手打快捷键字符串，极易因空格、大小写、键名拼写错误（如 `Ctrl` vs `Control`）导致静默注册失败。
+
+根因：
+1. Win32 `RegisterHotKey` 默认在按键按住时持续发送 `WM_HOTKEY` 消息；
+2. 普通文本框无法感知原始 Virtual Key 与修饰键组合状态。
+
+改法：
+1. 注册 Win32 热键时加入 `MOD_NOREPEAT = 0x4000` 标志位，由 Windows 内核直接抑制长按重复触发：
+
+```csharp
+const uint MOD_NOREPEAT = 0x4000;
+RegisterHotKey(hwnd, id, modifiers | MOD_NOREPEAT, vk);
+```
+
+2. 编写专用交互式录制控件 `HotkeyBox : Control`：通过 `PreviewKeyDown` 拦截原始 `KeyEventArgs` 并设 `e.Handled = true`；提取 `Keyboard.Modifiers` 并针对 `Key.System` 获取 `e.SystemKey`，支持按 <kbd>Esc</kbd> 取消录制、按 <kbd>Backspace</kbd>/<kbd>Delete</kbd> 清除，标准化序列化为统一格式（如 `Win+Alt+S`）。
+
+## 切换开机启动方式后，设置和系统实际状态不一致
+
+普通托盘应用使用当前用户权限启动。需要管理员权限的单次操作在用户主动触发时请求提升。特别留意安装位置：本技能的免 UAC 安装与便携包通常放在用户可写目录，不能让高权限任务长期运行其中可被替换的程序。
+
+排查已有企业部署时，确认实际登录用户、任务主体、可执行文件权限和触发条件。`HighestAvailable` 取决于任务账户本身拥有的权限。计划任务还要检查电池供电与执行时限对常驻应用的影响。[Microsoft Task Scheduler 权限上下文](https://learn.microsoft.com/windows/win32/taskschd/security-contexts-for-running-tasks)
+
+设置页应区分**已应用、用户取消、失败**。UAC 取消可由 Win32 错误码 1223 识别，访问被拒绝可由 COM HRESULT 判断。向用户报告具体结果，回读系统状态后再保存设置；新方式成功前保留能工作的原启动项。对于单文件发布，用 `Environment.ProcessPath` 核对当前可执行文件。用测试替身覆盖取消和失败分支，普通测试期间不写登录配置。
+
+接管外部启动项到自己的启动清单时，先确认清单真正保存成功，再禁用原项；`void Save()` 返回并不能证明落盘成功。禁用失败时撤销本次新增或启用变更，保存回滚结果；回滚保存也失败时如实报告。按启动类型、目标、参数和工作目录判断等价，避免把同一程序的不同启动方式吞成一条。
+
+## 提权重试进程在跑，却没有可操作的确认框
+
+先用阶段日志区分：是否取得管理员令牌、是否读到待确认范围、是否显示确认框、是否取消或完成。进程存活和 `RunAs` 启动成功都不能证明确认框可操作。
+
+- **独立确认框的启动时序**：没有主窗口的 helper 若在早期 `OnStartup` 里直接进入异步／模态流程而卡住，可把这段工作排到 Dispatcher 消息循环启动后执行；本次使用 `BeginInvoke` / `ApplicationIdle` 修复。核对应用的 ShutdownMode，完成或取消后显式结束 helper；不要为了单条分支改掉整个应用的窗口生命周期。
+- **没有 owner，也没有任务栏入口**：检查 ownerless 对话框的 `ShowInTaskbar`，以及另一个置顶窗口是否盖住了按钮。独立提权确认框可以显示任务栏入口；不要因此让所有普通工具窗都进任务栏。窗口可被枚举或截图，不代表当前自动化进程有能力向高权限窗口发送输入；点击无响应时交由用户操作，再核对结果。
+- **提权后读到另一个数据库**：本次实测中，RunAs 子进程没有沿用父进程的沙箱环境变量。需要共享隔离数据目录时，由启动器明确传递必要参数，子进程在创建路径、设置和服务之前验证并应用。使用 `ArgumentList`，兼容旧变量名时统一处理空白值；限制专用参数只在相应 helper 模式生效。不要把父进程的全部命令行或环境不加区分地转发。
+
+文件写回类提权重试还有一个授权边界：确认窗口显示的目标路径、动作、内容摘要应来自冻结的条目集合；批准后再核对历史记录没有改变，并校验实际写入字节。不要只凭一个操作 ID，在用户确认后重新查询并执行扩大了的失败列表。根据该流程的权限边界决定何时读取目标内容，本次采用确认前不探测目标、确认后检查和备份。取消时不执行重试业务写入。实际验证方法见 `dev-switches.md`「人工交互验收」。
+
+## 配置损坏后，自动保存把原文件覆盖成默认配置
+
+读取配置失败后用默认值继续展示界面，随后语言解析、迁移或控件初始化又触发公共保存入口，原始损坏文件就被默认配置覆盖了。只拦退出保存，或只跳过一次保存，都挡不住这些路径。
+
+保留独立的「原配置未读成功」状态，在共同写入入口守住；不能用「当前模型存在」代表原文件可覆盖。备份成功也不等于可以自动重置。备份失败要报告实际错误，恢复写入应沿用产品明确的修复流程。测试用临时损坏文件走读取、初始化和公共保存链，断言原始字节未变，并覆盖备份失败。
+
+## 后台扫描完成了，筛选列表仍然卡顿
+
+把扫描入口放进 `Task.Run` 后，搜索或切换筛选仍会卡住：筛选谓词、行属性 getter 又根据路径调用了 `File.Exists` / `Directory.Exists`。网络目录和离线路径的延迟因此重新落到 UI 线程上。
+
+在后台扫描阶段计算分类结果，并按目录复用探测；UI 过滤读取已计算的值。若后台结果缓存跨线程共用，检查其线程安全。用注入的慢探测计数器验证同目录只查一次、后续过滤不再查磁盘；模拟延迟只能证明调用边界，真实网络盘仍需单独实测。
+
+## 面板里已保存编辑，主窗口列表仍显示旧值
+
+两个入口共享同一个模型，但各自持有行 ViewModel。模型就地修改后，`ObservableCollection` 本身没有增删事件，行也没有发属性通知，磁盘保存成功仍不会更新另一处展示。
+
+沿现有保存回调通知相关列表刷新或重建行，并尽量保留选中项；局部刷新能解决时无需增加全局事件总线。用于跳过重建的签名必须覆盖显示字段及身份字段，否则内容变了仍会被当作未变。回归测试同时断言另一入口的行值已更新、保存重读一致；复制和排序还要检查重读后的父引用与执行顺序。
+
+## 更新缓存里有 exe，却可能是上次中断留下的半成品
+
+直接解压到最终版本目录，下次只凭 `File.Exists` 命中缓存，会把未完成提取的文件报告成可用。并发检查也可能互相覆盖暂存文件。另一个容易混淆的分支是把所有 HTTP 404 都当作「没有新版」：元数据不存在与发布资产缺失应分别处理。
+
+在同卷唯一暂存目录内完成下载、校验与提取，确认预期 exe 后再移动到最终目录。既有缓存需要完成标记及内容核验；本地摘要能检查意外损坏，不能代替可信来源验证。替换无效旧缓存时保留恢复路径，失败后清理本次暂存目录。进程内并发用互斥保护；它不覆盖多进程竞争，先核对应用的单实例边界。
+
+用 HTTP 替身与临时目录覆盖中断缓存、篡改、提取失败后的重试、并发调用及不同阶段的 404。不要在测试中执行下载内容，或覆盖用户正在运行的 exe。

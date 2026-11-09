@@ -82,12 +82,16 @@ export interface UpdateCheckResult {
   error?: string;
 }
 
-export const checkForUpdates = async (): Promise<UpdateCheckResult> => {
+export const checkForUpdates = async (skippedVersion = ""): Promise<UpdateCheckResult> => {
   if (!(await isTauri())) return { hasUpdate: false, error: "Not in Tauri" };
   try {
     const { check } = await import("@tauri-apps/plugin-updater");
     const update = await check();
     if (!update) return { hasUpdate: false };
+    if (update.version === skippedVersion) {
+      await update.close();
+      return { hasUpdate: false };
+    }
     await update.download(); // auto-download, install on confirm
     return { hasUpdate: true, version: update.version, downloaded: true, install: () => update.install() };
   } catch (error) {
@@ -144,10 +148,9 @@ export const useAutoUpdate = ({ startupDelay = 3000, checkInterval = 24 * 60 * 6
     const now = Date.now();
     if (now - lastCheck.current < 60 * 60 * 1000) return; // throttle 1h
     lastCheck.current = now;
-    const r = await checkForUpdates();
+    let skipped = ""; try { skipped = localStorage.getItem(SKIPPED_KEY) || ""; } catch {}
+    const r = await checkForUpdates(skipped);
     if (r.hasUpdate && r.downloaded && r.version) {
-      let skipped = ""; try { skipped = localStorage.getItem(SKIPPED_KEY) || ""; } catch {}
-      if (skipped === r.version) return;
       confirm(r);
     }
   }, [confirm]);

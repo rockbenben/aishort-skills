@@ -161,3 +161,28 @@ test('CI SDK sources: two inputs and shadowing are P1; comments do not trigger; 
   f = analyzeDotnet({ projects, globalJsons: globals, metadata, workflows: [{ file: 'w.yml', text: 'jobs:\n  b:\n    steps:\n      - uses: actions/setup-dotnet@v6\n        with:\n          global-json-file: global.json\n' }], now: NOW }).ci;
   assert.equal(f.length, 0);
 });
+
+test('major roll-forward permits a newer installed SDK to build a newer TFM', () => {
+  const params = { projects: [{ file: 'App.csproj', tfms: ['net10.0'], globalJson: 'global.json' }], metadata, now: NOW };
+  for (const policy of ['latestMajor', 'major', 'disable', 'latestFeature']) {
+    const r = analyzeDotnet({ ...params, globalJsons: [{ file: 'global.json', version: '8.0.100', rollForward: policy }] });
+    assert.equal(r.framework.some(f => f.id === 'dotnet-sdk-cannot-target'), ['disable', 'latestFeature'].includes(policy), policy);
+  }
+});
+
+test('SDK inputs and missing setup are scoped to their own steps and jobs', () => {
+  const text = [
+    'jobs:', '  first:', '    steps:', '      - uses: actions/setup-dotnet@v6',
+    '        with: { global-json-file: global.json }', '      - uses: actions/setup-dotnet@v6',
+    '        with: { dotnet-version: 9.0.100 }', '  second:', '    steps:', '      - run: dotnet build',
+    '  web:', '    steps:', '      - run: npm ci',
+  ].join('\n');
+  const r = analyzeDotnet({
+    projects: [{ file: 'App.csproj', tfms: ['net10.0'], globalJson: 'global.json' }],
+    globalJsons: [{ file: 'global.json', version: '10.0.100' }], metadata, now: NOW,
+    workflows: [{ file: 'ci.yml', text }],
+  });
+  assert.deepEqual(r.ci.map(f => [f.id, f.line]), [
+    ['dotnet-version-shadows-global-json', 6], ['dotnet-ci-setup-missing', 8],
+  ]);
+});

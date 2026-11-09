@@ -1,6 +1,6 @@
 ---
 name: deepl-translate-node
-version: 1.1.9
+version: 1.1.10
 description: Use when translating text and the result has to be right — proper nouns, legal/medical/technical terms, idioms, distant language pairs. 用 DeepL 翻译 / 翻译这段.
 
 metadata:

@@ -13,7 +13,7 @@
 - **签名**：Windows 公开发布后签（Azure Artifact Signing 优先）；macOS Developer ID + 公证；Tauri 更新另需 `TAURI_SIGNING_PRIVATE_KEY`。未签名时在 release 说明写明 SmartScreen/打开方式。
 - **winget 只留一条路**：清单归 `winget-manifests`（`apps.json` 唯一源，发布仓不提交）；不在那条流水线的发布者才在 `publish` 之后用 `needs: publish` 提交。不要依赖 `on: release: published`（GITHUB_TOKEN 发布的 release 不触发）。
 - **Action 用大版本标签**；不装 Dependabot。
-- **portable/dir/zip 不自更新**；UI 与 release 说明写明。
+- **产物组织与非自更新说明**：Tauri/Electron 的 Windows 正式产物一律为 NSIS 安装包（以配合其内置 auto-updater）；portable zip/exe 仅作免安装试用，不可自动更新，UI 与 release 说明需写明。（若为 .NET/WPF 原生应用，发布产物按 `wpf-desktop` 的「三轨分发矩阵」执行）。
 - **发布后匿名核验**：`releases/latest`、资产/feed 可下载；每个平台实测 N→N+1。
 
 ## 总流程
@@ -32,7 +32,7 @@ push tag vX.Y.Z (默认分支上的提交)
 ## 两个工作流
 
 - `ci.yml`：`pull_request` + main push；`contents: read`；不碰 secrets。不可信代码只在这里跑。
-- `release.yml`：tag 触发 + `workflow_dispatch(tag)` 重跑。顶层 `contents: read`，只有需要写 release 的 job 提权（Tauri 的 draft/build/publish；Electron 模板只有 publish）。同一文件里 `needs: validate`，所以红树不会发布。
+- `release.yml`：tag push 触发。手动重跑用 `gh workflow run release.yml --ref "$TAG" -f tag="$TAG"`，使事件与产物证明指向同一个提交。构建检出 validate 输出的 SHA，公开前再次核对 tag 指向。顶层 `contents: read`，只有需要写 release 的 job 提权（Tauri 的 draft/build/publish；Electron 模板只有 publish）。同一文件里 `needs: validate`，所以红树不会发布。
 - workflow 只维护在默认分支。tag 运行的是**被打 tag 的提交里的 workflow 文件**：修了 workflow 但给旧提交打 tag，跑的仍是旧 workflow。
 - 双应用 release hub：一个 tag 同时扇出 Tauri 与 Electron 构建时，两边都从 **tag** 推导 release 名与版本，各自 `actions/checkout` 指定自己的 ref；不要让 Electron 侧按 Tauri 的“应用版本名”等待草稿——版本不一致就会超时、什么都没附上。
 
@@ -41,14 +41,17 @@ push tag vX.Y.Z (默认分支上的提交)
 tag 是唯一来源；发版提交先 `npm pkg set version=x.y.z`（Tauri 的 `tauri.conf.json` `version: "../package.json"`），再打 tag。validate 断言一致，不一致即 `::error::version mismatch`。
 不要用 `tagName: v__VERSION__` 让 tauri-action 按应用版本命名：tag 与配置不一致时，release 会挂到另一个版本下，推送的 tag 反而没有 release。
 
+将技能的[目标大版本表](version-targets.json)复制到应用的 `.github/desktop-version-targets.json`。发布门禁在干净安装后比较实际解析版本与这份文件。升级应用时同步更新它，重跑旧 tag 时保持当时的目标。
+
 ## Tauri：草稿必须被发布
 
-- 先在 `draft` job 建**唯一**草稿并把 `releaseId` 交给矩阵；多个 tauri-action 并行“找不到就创建”会产生重复草稿。
-- `latest.json` 由各 job 合并写入；publish 逐个检查 `windows-x86_64`、`windows-aarch64`、`darwin-aarch64`、`darwin-x86_64`、`linux-x86_64`、`linux-aarch64` 的 url+signature，丢失即失败并重跑对应 job。
-- `latest.json` 的 `url` 可能是 API asset URL（`/releases/assets/<id>`）或直链；校验前两种都要解析到资产名，不能只按 `basename` 取（tauri-action v1 实测会产出 API asset URL）。
+- 先在 `draft` job 建**唯一**草稿并把 `releaseId` 交给矩阵；矩阵各平台都向这个草稿上传。
+- tauri-action 对同一份 latest.json 做读取、合并和替换。模板用 `max-parallel: 1` 串行执行这六个写入者。publish 逐个检查 `windows-x86_64`、`windows-aarch64`、`darwin-aarch64`、`darwin-x86_64`、`linux-x86_64`、`linux-aarch64` 的 URL、架构、载体，以及清单签名是否等于对应载体的 .sig。
+- `latest.json` 的 `url` 可能是 API asset URL（`/releases/assets/<id>`）或带 tag 的直链；API ID 需属于当前草稿，两种 URL 都要解析到资产名，不能只按 `basename` 取（tauri-action v1 实测会产出 API asset URL）。
 - `updaterJsonPreferNsis: true`：同时产 MSI 与 NSIS 时默认指向 MSI。
 - 草稿对 updater 不可见（`releases/latest` 忽略草稿）——构建全绿、没人收到更新。
 - `GET /releases/tags/<tag>` **不返回草稿**；在 release 列表里按 `tag_name` + `draft` 找。`gh release view/download/upload` 对已认证调用者能解析草稿。
+- 三个应用模板的 publish job 使用同一仓库级并发组排队。稳定 tag 升为 latest 前与已公开的稳定版本比较，后到的低版本以历史 release 公开，预发布维持自己的渠道。
 - `make_latest` 不是多余的：发布草稿后 GitHub 不一定重算 latest。判定标准是 API `releases/latest` 指向谁，不是 release 字段；下载重定向还会晚几分钟。
 - `createUpdaterArtifacts` 需要 `TAURI_SIGNING_PRIVATE_KEY`；没有它 tauri-action 失败。`.pub` 可以入库，私钥只在 secrets。
 - portable exe 不能自更新：`update.install()` 依赖安装布局。UI 里写明。
@@ -61,11 +64,11 @@ tag 是唯一来源；发版提交先 `npm pkg set version=x.y.z`（Tauri 的 `t
 - 打包一律 `--publish never`，由唯一 publish job 上传；否则 electron-builder 在矩阵中各自发布、竞争、半成品。
 - **手动上传要自己改名**：electron-builder 的 GitHub publisher 上传时会把资产改名（GitHub 的资产名只允许 `[0-9A-Za-z._-]`，`my-app Setup 1.0.0.exe` → `my-app-Setup-1.0.0.exe`），并把更新清单里的 `url` 改成同一个名字。`--publish never` 意味着那次改名不会发生——照原样上传，清单就指向一个不存在的资产，应用内更新直接 404。publish job 必须先按同一规则改名（空格 → 短横线），再校验清单里每个 `url` 在本地都有对应文件。
 - Electron ≥ 42：安装后 `npx install-electron`（Yarn：`yarn run install-electron`）；不再有 postinstall 下载。它是 bin 不是 script，`npm run install-electron` 会报 Missing script。**打包本身不受影响**（electron-builder 会自己下载发行包），受影响的是下载时机：装依赖时不再下，改成第一次用到时才下，离线 runner 会在那一刻才失败。
-- 上传 `latest*.yml` 引用的全部文件和 `.blockmap`；publish 先校验 `files[].url` 都存在且 `version` 等于 tag。
+- 模板按 GitHub provider 默认的 `latest*.yml` 处理。上传清单引用的全部文件和所需的 `.blockmap`；逐文件比对 SHA-512，再比较本次构建与草稿的文件名和 SHA-256。定制 channel 或 universal 产物时，同步调整清单名、架构判断与公开后的探测 URL。
 - **清单必须指向能自更新的载体，publish job 要断言**：Windows 只认 NSIS；macOS 只认 zip；Linux 只认 AppImage（deb/rpm 只作安装渠道）。
 - **macOS 的 zip 不是可选的第二个包**：electron-updater 的 MacUpdater 只在清单里找 zip——`findFile(files,"zip",["pkg","dmg"])` 里的 `pkg`/`dmg` 是**排除表**，不是兜底。只有 dmg 时清单会指向 .dmg，检查更新抛 `ERR_UPDATER_ZIP_FILE_NOT_FOUND`：**Mac 上「检查更新」100% 失败，而构建全绿、清单也在，只有用户点得到**。`audit.mjs` 的 `mac-update-needs-zip` 检查就是盯这个。
 - macOS 自动更新还要求**应用已签名**（Squirrel.Mac 要求更新包与已装应用同一签名）；未签名时更新查得到、装不上，release 说明写明手动更新。
-- artifact 名必须唯一（`dist-${{ matrix.name }}`）；下载用 `pattern` + `merge-multiple`。
+- artifact 名必须唯一（`dist-${{ matrix.name }}`）；下载后按平台目录归集，同名文件在打包上传前报错。
 
 ## 签名（按平台）
 

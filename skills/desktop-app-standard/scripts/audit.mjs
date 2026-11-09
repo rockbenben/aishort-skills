@@ -1,16 +1,16 @@
 #!/usr/bin/env node
-// desktop-app-standard 0.7.3 — read-only fact collector for Tauri / Electron apps.
+// Read-only fact collector for Tauri / Electron apps.
 // Never installs dependencies, runs project scripts, writes into the project, commits, tags or publishes.
 import fs from 'node:fs';
 import path from 'node:path';
-import { exact, compare, stableMax, walk, read, cargoPackages, workflowHints, usageHints, requestJson, releaseHistory,
+import { TOOL_VERSION, exact, compare, stableMax, walk, read, cargoPackages, workflowHints, usageHints, requestJson, releaseHistory,
   LOCKFILES, parseYarnLock, parsePnpmLock, parseBunLock, resolveFromLock, electronSupportedMajors, nodeSupportFacts, classifyNotes,
   changelogSections, refVersion, WRITE_CAPABLE_ACTIONS, macTargetsFromBuilder, macTargetsFromArgs, parseJson5 } from './core.mjs';
 import { runTraps, defaultContext, stripComments } from './ci-traps.mjs';
 import { parseTfms, parseGlobalJson, normalizeMetadata, analyzeDotnet, metadataUrl, tfmInfo, sdkParts } from './dotnet.mjs';
 
 const USAGE = `Usage: node audit.mjs <project-dir> [--offline] [--ci-only] [--dotnet] [--json] [--pages 1..10] [--out <report.json>] [--since-baseline <review.json>]
-  --ci-only   only the stack-agnostic CI & release checks (also for .NET or other stacks)
+  --ci-only   CI & release checks using local stack/lockfile context, without framework release lookups
   --dotnet    .NET runtime/SDK audit (TFM support/EOL, global.json pin/rollForward) + CI checks
 Read-only. --out writes only the named JSON report (refuses to overwrite). Exit: 0 complete within bounds, 2 incomplete/offline, other = failure.`;
 const args = process.argv.slice(2);
@@ -37,11 +37,12 @@ try { rootStat = fs.statSync(root); } catch { /* reported below */ }
 if (!rootStat || !rootStat.isDirectory()) die(`项目路径不是目录: ${root}`);
 if (!Number.isInteger(pages) || pages < 1 || pages > 10) die('--pages 必须是 1..10 的整数');
 
+const auditFrameworks = !ciOnly && !dotnet;
 const checkedAt = new Date().toISOString();
-const report = { schemaVersion: 3, toolVersion: '0.7.3', checkedAt, project: root, mode: offline ? 'offline' : 'online', ciOnly, dotnetRequested: dotnet,
+const report = { schemaVersion: 3, toolVersion: TOOL_VERSION, checkedAt, project: root, mode: offline ? 'offline' : 'online', ciOnly, dotnetRequested: dotnet,
   collectionComplete: !offline, errors: [], warnings: [], inventory: [], packageManager: null, upstream: [], electronSupport: null,
   nodeSupport: null, nodePins: [], compatibility: [], frameworkFindings: [], changes: [], actions: [], ciFindings: [], dotnet: null,
-  notes: ['事实采集与候选线索，不是完整安全审计、构建验证或自动升级。P0/P1 候选需结合文件证据人工确认。'] };
+  notes: ['此脚本只读。升级任务继续按 references/upgrade-dependencies.md 修改目标仓库并验证。P0/P1 候选需核对文件与上游证据。'] };
 const incomplete = msg => { report.collectionComplete = false; if (msg) report.warnings.push(msg); };
 
 // ---------------- scan ----------------
@@ -62,10 +63,9 @@ function text(file) {
   }
   return texts.get(file);
 }
-function parseJson(file, { soft = false } = {}) {
+function parseJson(file) {
   try { return JSON.parse(text(file)); }
-  catch { if (soft) { report.warnings.push(`${file}: 非严格 JSON（JSON5/JSONC?），相关检查需人工确认`); return null; }
-    report.collectionComplete = false; report.errors.push({ scope: file, message: 'JSON 解析失败' }); return null; }
+  catch { report.collectionComplete = false; report.errors.push({ scope: file, message: 'JSON 解析失败' }); return null; }
 }
 const dirOf = f => path.posix.dirname(f);
 
@@ -97,9 +97,15 @@ if (rootPkg?.packageManager) report.packageManager = rootPkg.packageManager;
 // only ever duplicates an inventory row — and if it names a dependency the
 // lockfile cannot resolve, it would mark the whole collection incomplete
 // (exit code 2) for a file nobody edits.
+const builderManifestTargets = new Map();
 const isPackagedAppManifest = f => /(^|\/)resources\/app\/package\.json$/.test(f);
 for (const file of scan.files.filter(f => /(^|\/)package\.json$/.test(f) && !isPackagedAppManifest(f))) {
   const data = file === 'package.json' ? rootPkg : parseJson(file); if (!data) continue;
+  const macTarget = data.build?.mac?.target;
+  if (macTarget) {
+    const targets = [macTarget].flat().map(entry => typeof entry === 'string' ? entry : entry?.target).filter(Boolean);
+    if (targets.length) builderManifestTargets.set(file, targets);
+  }
   if (!enginesNode && data.engines?.node) enginesNode = data.engines.node;
   const dir = dirOf(file);
   for (const [name, declared] of Object.entries({ ...data.dependencies, ...data.devDependencies, ...data.optionalDependencies })) {
@@ -119,7 +125,7 @@ for (const file of scan.files.filter(f => /(^|\/)package\.json$/.test(f) && !isP
     const resolved = exact(res.version);
     report.inventory.push({ ecosystem: 'npm', name, manifest: file, declared, resolved, lockfile: lock?.file ?? null, lockKind: lock?.kind ?? null,
       locator: res.locator, candidates: res.candidates, status: resolved ? 'lock-resolved' : 'unresolved' });
-    if (!resolved) incomplete(lock?.kind === 'bun-binary' ? `${file}: ${name} 由二进制 bun.lockb 锁定，脚本无法读取；运行 \`bun pm ls\` 或迁移到文本 bun.lock。`
+    if (!resolved && auditFrameworks) incomplete(lock?.kind === 'bun-binary' ? `${file}: ${name} 由二进制 bun.lockb 锁定，脚本无法读取；运行 \`bun pm ls\` 或迁移到文本 bun.lock。`
       : !lock ? `${file}: ${name} 没有锁文件；声明范围 ${declared} 不是已安装版本。`
       : `${file}: ${name} 未能从 ${lock.file} 唯一解析（候选: ${res.candidates.join(', ') || '无'}）；用 \`npm ls ${name}\` / \`yarn why ${name}\` / \`pnpm why ${name}\` 等原生只读命令核验。`);
   }
@@ -139,7 +145,7 @@ for (const file of scan.files.filter(f => /(^|\/)Cargo\.toml$/.test(f))) {
   for (const m of (text(file) ?? '').matchAll(/^\s*(tauri(?:-build|-cli|-plugin-[\w-]+)?)\s*=\s*(.+)$/gm)) {
     const covered = report.inventory.some(x => x.ecosystem === 'cargo' && x.name === m[1] && (dirOf(x.manifest) === '.' || dirOf(file) === dirOf(x.manifest) || dirOf(file).startsWith(dirOf(x.manifest) + '/')));
     if (!covered) { report.inventory.push({ ecosystem: 'cargo', name: m[1], manifest: file, declared: m[2].trim(), resolved: null, status: 'unresolved', registry: false });
-      incomplete(`${file}: ${m[1]} 仅发现 TOML 声明；可能由父工作区锁定、重命名或 git/path，需 \`cargo metadata\` 核验。`); }
+      if (auditFrameworks) incomplete(`${file}: ${m[1]} 仅发现 TOML 声明；可能由父工作区锁定、重命名或 git/path，需 \`cargo metadata\` 核验。`); }
   }
 }
 
@@ -179,10 +185,11 @@ let platforms = ['windows', 'macos', 'linux'];
 const policyNotes = [], acceptedRules = new Map();
 const osOf = list => [...new Set(list.map(p => String(p).split('-')[0].replace(/^win$/, 'windows').replace(/^mac$|^darwin$/, 'macos')))];
 if (scan.files.includes('.desktop-policy.json')) {
-  const pol = parseJson('.desktop-policy.json', { soft: true });
+  const pol = parseJson('.desktop-policy.json');
   // House style is the default; only a documented deviation (reason + revisitWhen) narrows it.
   const dev = Array.isArray(pol?.deviations) ? pol.deviations.find(d => d?.rule === 'platforms' && Array.isArray(d.value)) : null;
-  if (dev && dev.reason && dev.revisitWhen) { platforms = osOf(dev.value); report.policyPlatforms = dev.value; report.policyDeviation = { reason: dev.reason, revisitWhen: dev.revisitWhen }; }
+  const documented = d => [d.reason, d.revisitWhen].every(v => typeof v === 'string' && v.trim().length > 0);
+  if (dev && documented(dev)) { platforms = osOf(dev.value); report.policyPlatforms = dev.value; report.policyDeviation = { reason: dev.reason, revisitWhen: dev.revisitWhen }; }
   else if (dev) policyNotes.push({ id: 'policy-deviation-undocumented', severity: 'P2', file: '.desktop-policy.json', line: null, confidence: 'confirmed',
     detail: '`.desktop-policy.json` 缩小了平台范围，但缺少 reason 或 revisitWhen；按 house style 仍以 Windows/macOS/Linux 全平台为准。', fix: '补齐 reason 与 revisitWhen（日期或触发条件），或删除该偏离。' });
   else if (Array.isArray(pol?.platforms)) {
@@ -197,7 +204,7 @@ if (scan.files.includes('.desktop-policy.json')) {
   // Any other deviation names a finding id: documented ones turn that finding into "accepted", undocumented ones are drift.
   for (const d of Array.isArray(pol?.deviations) ? pol.deviations : []) {
     if (!d?.rule || d.rule === 'platforms') continue;
-    if (d.reason && d.revisitWhen) acceptedRules.set(d.rule, { reason: d.reason, revisitWhen: d.revisitWhen });
+    if (documented(d)) acceptedRules.set(d.rule, { reason: d.reason, revisitWhen: d.revisitWhen });
     else policyNotes.push({ id: 'policy-deviation-undocumented', severity: 'P2', file: '.desktop-policy.json', line: null, confidence: 'confirmed',
       detail: `\`.desktop-policy.json\` 偏离 \`${d.rule}\` 缺少 reason 或 revisitWhen，不予接受；该发现照常报告。`, fix: '补齐 reason 与 revisitWhen（日期或触发条件），或删除该偏离。' });
   }
@@ -274,6 +281,9 @@ if (hasElectron && has('electron-updater')) {
       macLine = at ? lineAt(builderText, at.index) : null;
     }
   }
+  if (!macTargets && builderManifestTargets.size === 1) {
+    [macSrc, macTargets] = builderManifestTargets.entries().next().value;
+  }
   const hasZip = macTargets?.some(x => /^zip$/i.test(x));
   const hasInstaller = macTargets?.some(x => /^(dmg|pkg)$/i.test(x));
   if (macTargets && hasInstaller && !hasZip) {
@@ -286,7 +296,7 @@ if (hasElectron && has('electron-updater')) {
 if (yarnFlavor === 'classic') report.ciFindings.push({ id: 'yarn-classic', severity: 'notice', file: 'yarn.lock', line: null, confidence: 'confirmed',
   detail: '项目使用 Yarn 1（classic，仅维护）。house style 默认 npm，但存量 Yarn 项目不强迁：按自己的锁文件走，CI 必须 `--frozen-lockfile`（违反时另报 yarn-install-not-frozen）。',
   fix: '不需要动作。真要迁移时单独一个 PR（迁 npm：删 yarn.lock、`npm install` 生成 package-lock.json、CI 改 `cache: npm` + `npm ci`），不要与框架升级混在一起。' });
-if (!ciOnly && !dotnet && !report.inventory.length) incomplete('未发现 Tauri/Electron 依赖；bootstrap 请按 references/bootstrap.md 选择框架。其他栈请用 --ci-only 或 --dotnet。');
+if (auditFrameworks && !report.inventory.length) incomplete('未发现 Tauri/Electron 依赖；bootstrap 请按 references/bootstrap.md 选择框架。其他栈请用 --ci-only 或 --dotnet。');
 
 // ---------------- .NET projects / SDK pin (--dotnet) ----------------
 let dotnetProjects = [], dotnetGlobals = [];
@@ -299,11 +309,11 @@ if (dotnet) {
   for (const file of projectFiles) {
     const parsed = parseTfms(text(file) ?? '');
     let { tfms, unresolved } = parsed, propsFile = null;
-    if (!tfms.length) {
+    if (!tfms.length && !unresolved.length) {
       for (const props of [nearest(dirOf(file), propsFiles), nearest(dirOf(file), targetsFiles)]) {
         if (!props) continue;
         const p = parseTfms(text(props) ?? '');
-        if (p.tfms.length) { tfms = p.tfms; unresolved = p.unresolved; propsFile = props; break; }
+        if (p.tfms.length || p.unresolved.length) { tfms = p.tfms; unresolved = p.unresolved; propsFile = props; break; }
       }
     }
     dotnetProjects.push({ file, tfms, unresolved, globalJson: nearest(dirOf(file), globalFiles), propsFile });
@@ -324,7 +334,17 @@ const sourceFileTexts = () => {
   if (sourceFiles) return sourceFiles;
   const candidates = scan.files.filter(f => /\.(?:[cm]?[jt]sx?|rs|json|toml|ya?ml|vue|svelte)$/.test(f) && !/(?:lock|shrinkwrap)/.test(f));
   sourceFiles = [];
-  for (const file of candidates.slice(0, 1500)) { const raw = text(file); if (raw !== null) sourceFiles.push({ file, text: raw }); }
+  for (const file of candidates.slice(0, 1500)) {
+    const raw = text(file);
+    if (raw === null) continue;
+    // An earlier --out report quotes upstream notes and the very tokens we search for.
+    if (file.endsWith('.json') && raw.includes('"schemaVersion"')) {
+      let data;
+      try { data = JSON.parse(raw); } catch { /* other JSON dialects may still contain usage */ }
+      if (Array.isArray(data?.inventory) && Array.isArray(data?.changes) && data?.toolVersion) continue;
+    }
+    sourceFiles.push({ file, text: raw });
+  }
   if (candidates.length > 1500) report.warnings.push('API 使用提示仅扫描前 1500 个候选源文件；无匹配不代表不受影响。');
   return sourceFiles;
 };
@@ -380,41 +400,74 @@ if (nodeFacts) {
 const pushChange = (framework, rel, sourceUrl) => report.changes.push({ framework, tag: rel.tag, version: rel.version, url: rel.url ?? sourceUrl, publishedAt: rel.publishedAt ?? null,
   ...classifyNotes(rel.body), ...usageHints(sourceFileTexts(), rel.body), reviewed: false });
 
-if (!offline && !ciOnly) {
+const targetMajors = JSON.parse(fs.readFileSync(new URL('../references/version-targets.json', import.meta.url), 'utf8'));
+
+if (auditFrameworks) {
+  for (const item of report.inventory) item.targetMajor = targetMajors[item.ecosystem]?.[item.name] ?? null;
+}
+
+if (!offline && auditFrameworks) {
   const knownVersions = new Map();
   for (const key of [...new Set(report.inventory.map(x => `${x.ecosystem}:${x.name}`))]) {
     const [ecosystem, ...rest] = key.split(':'), name = rest.join(':');
     await collect(key, async () => {
-      const source = ecosystem === 'npm' ? `https://registry.npmjs.org/${encodeURIComponent(name)}/latest` : `https://crates.io/api/v1/crates/${encodeURIComponent(name)}`;
+      const targetMajor = targetMajors[ecosystem]?.[name] ?? null;
+      const npm = ecosystem === 'npm';
+      const source = npm ? `https://registry.npmjs.org/${encodeURIComponent(name)}${targetMajor ? '' : '/latest'}` : `https://crates.io/api/v1/crates/${encodeURIComponent(name)}`;
       const data = await get(source);
-      const latest = ecosystem === 'npm' ? exact(data.version) : stableMax((data.versions ?? []).filter(v => !v.yanked).map(v => v.num));
-      if (ecosystem === 'cargo') knownVersions.set(name, (data.versions ?? []).map(v => v.num).filter(exact));
-      if (!latest) throw new Error('未找到已确认稳定版；dist-tag 可能指向预发布版，需人工核验');
-      report.upstream.push({ ecosystem, name, latestStable: latest, checkedAt, source, engines: data.engines ?? null,
-        rustVersion: data.versions?.find(v => v.num === latest)?.rust_version ?? null });
+      let versions, latestStable, engines = null, rustVersion = null;
+      if (npm && targetMajor) {
+        const tags = data['dist-tags'] ?? {};
+        const stableTags = new Set(), previewTags = new Set();
+        for (const [tag, version] of Object.entries(tags)) {
+          const preview = /^(next|alpha|beta|rc|canary|nightly|dev|preview|experimental)(?:[-.\d]|$)/i.test(tag);
+          (preview ? previewTags : stableTags).add(version);
+        }
+        versions = Object.keys(data.versions ?? {}).filter(v => exact(v) && !data.versions[v].deprecated
+          && (!previewTags.has(v) || stableTags.has(v)));
+        latestStable = exact(tags.latest) ?? stableMax(versions);
+      } else if (npm) {
+        latestStable = exact(data.version);
+        versions = latestStable ? [latestStable] : [];
+        engines = data.engines ?? null;
+      } else {
+        versions = (data.versions ?? []).filter(v => !v.yanked).map(v => v.num).filter(exact);
+        knownVersions.set(name, versions);
+        latestStable = stableMax(versions);
+      }
+      if (!latestStable) throw new Error('包源中未找到可核验的稳定版本');
+      const targetStable = targetMajor ? stableMax(versions.filter(v => Number(v.split('.')[0]) === targetMajor)) : latestStable;
+      if (!targetStable) incomplete(`${name}: 包源中没有可用的 ${targetMajor}.x 稳定版，无法落实技能目标`);
+      if (npm && targetMajor) engines = data.versions?.[targetStable]?.engines ?? null;
+      if (!npm) rustVersion = data.versions?.find(v => v.num === targetStable)?.rust_version ?? null;
+      report.upstream.push({ ecosystem, name, latestStable, targetMajor, targetStable, checkedAt, source, engines, rustVersion });
     });
   }
-  const latestOf = name => report.upstream.find(x => x.name === name)?.latestStable ?? null;
+  const targetOf = name => report.upstream.find(x => x.name === name)?.targetStable ?? null;
   // Framework release notes over the exact (resolved, latest] interval.
   const frameworks = [];
   if (hasElectron) frameworks.push({ name: 'electron', repo: 'electron/electron', pattern: /^v(\d+\.\d+\.\d+)$/ });
   if (report.inventory.some(x => x.name === 'tauri' && x.ecosystem === 'cargo')) frameworks.push({ name: 'tauri', repo: 'tauri-apps/tauri', pattern: /^tauri-v(\d+\.\d+\.\d+)$/ });
   for (const fw of frameworks) await collect(`releases:${fw.name}`, async () => {
-    const floor = lowest(fw.name), target = latestOf(fw.name);
+    const floor = lowest(fw.name), target = targetOf(fw.name);
     if (fw.name === 'electron') {
       const index = await get('https://releases.electronjs.org/releases.json');
       if (!Array.isArray(index)) throw new Error('Electron 官方版本索引格式未知');
       const all = index.map(r => String(r.version).replace(/^v/, '')).filter(exact); knownVersions.set('electron', all);
       const supported = electronSupportedMajors(all);
+      if (!supported.length) throw new Error('Electron 版本索引缺少稳定版本，无法判断支持窗口');
       report.electronSupport = { supportedMajors: supported, policy: '最新三个稳定 major 受支持，且每条线只维护最新 minor', source: 'https://releases.electronjs.org/releases.json', schedule: 'https://releases.electronjs.org/schedule' };
+      if (!supported.includes(targetMajors.npm.electron)) report.frameworkFindings.push({ id: 'electron-target-unsupported', severity: 'P0', confidence: 'confirmed',
+        detail: `技能指定的 Electron ${targetMajors.npm.electron}.x 已不在上游支持窗口`, fix: '标明目标线的支持期冲突并复核技能版本策略。', source: report.electronSupport.schedule });
       for (const x of report.inventory.filter(i => i.name === 'electron' && i.resolved)) {
         const major = Number(x.resolved.split('.')[0]);
         if (!supported.includes(major)) report.frameworkFindings.push({ id: 'electron-unsupported-major', severity: 'P0', confidence: 'confirmed', file: x.manifest,
-          detail: `Electron ${x.resolved} 的 major ${major} 已不在受支持的 ${supported.join('/')} 内，不再获得安全补丁（含 Chromium）。`, fix: `升级到受支持 major（建议最新稳定 ${target ?? supported[0]}），逐 major 处理 breaking changes。`, source: report.electronSupport.schedule });
+          detail: `Electron ${x.resolved} 的 major ${major} 已不在受支持的 ${supported.join('/')} 内，不再获得安全补丁（含 Chromium）。`, fix: `核对技能目标 Electron ${targetMajors.npm.electron}.x 的支持期，在目标线上迁移并验证。`, source: report.electronSupport.schedule });
         else if (major === Math.min(...supported)) report.frameworkFindings.push({ id: 'electron-oldest-supported-major', severity: 'P1', confidence: 'confirmed', file: x.manifest,
           detail: `Electron ${major} 是当前最老的受支持 major，下一个 major 发布时即停止支持。`, fix: '在 schedule 的下个稳定版日期前完成升级计划。', source: report.electronSupport.schedule });
       }
     }
+    if (!target) return;
     const known = knownVersions.get(fw.name);
     const expected = floor && target && known?.includes(floor) && known.includes(target) ? [...new Set(known.filter(v => compare(v, floor) > 0 && compare(v, target) <= 0))] : null;
     const history = await releaseHistory(fw.repo, fw.pattern, floor, pages, get, expected);
@@ -426,7 +479,7 @@ if (!offline && !ciOnly) {
   const plugins = new Set(report.inventory.map(x => /^(?:tauri-plugin-|@tauri-apps\/plugin-)([\w-]+)$/.exec(x.name)?.[1]).filter(Boolean));
   for (const p of plugins) await collect(`plugin:${p}`, async () => {
     const rustName = `tauri-plugin-${p}`, jsName = `@tauri-apps/plugin-${p}`;
-    const local = lowest(rustName) ?? lowest(jsName), target = latestOf(rustName) ?? latestOf(jsName);
+    const local = lowest(rustName) ?? lowest(jsName), target = targetOf(rustName) ?? targetOf(jsName);
     const rust = report.inventory.filter(x => x.name === rustName), js = report.inventory.filter(x => x.name === jsName);
     const pairOk = rust.length && js.length ? rust.every(r => js.every(j => r.resolved && r.resolved === j.resolved)) : null;
     report.compatibility.push({ rule: 'official-plugin-exact-pair', plugin: p, status: pairOk === false ? 'mismatch' : pairOk ? 'ok' : 'one-side-only',
@@ -443,17 +496,17 @@ if (!offline && !ciOnly) {
   });
   // Packagers ship independently of Electron; read their own release notes for the local->latest interval.
   for (const pkg of ['electron-builder', 'electron-updater'].filter(n => has(n))) await collect(`releases:${pkg}`, async () => {
-    const floor = lowest(pkg), target = latestOf(pkg); if (!floor || !target || compare(floor, target) >= 0) return;
+    const floor = lowest(pkg), target = targetOf(pkg); if (!floor || !target || compare(floor, target) >= 0) return;
     const history = await releaseHistory('electron-userland/electron-builder', new RegExp(`^${pkg}@(\\d+\\.\\d+\\.\\d+)$`), floor, pages, get, null);
     const ghLatest = stableMax(history.releases.map(r => r.version));
-    if (ghLatest && compare(ghLatest, target) > 0) report.warnings.push(`${pkg}: GitHub 已有 ${ghLatest} release，但 npm latest 指向 ${target}；以 npm dist-tag 为安装目标，较新 release 列为观察。`);
+    if (ghLatest && ghLatest.split('.')[0] === target.split('.')[0] && compare(ghLatest, target) > 0) report.warnings.push(`${pkg}: GitHub 已有 ${ghLatest} release，本次核实的 npm 稳定目标是 ${target}。核实较新版本是否已发布到项目配置的包源并属于目标大版本的稳定线，符合时安装精确版本并验证。`);
     if (!history.reachedFloor && !history.exhausted) incomplete(`${pkg}: 未在 ${pages} 页内找到本地版本 ${floor} 的 release，变更区间可能不完整。`);
     for (const rel of history.releases.filter(r => compare(r.version, floor) > 0 && compare(r.version, target) <= 0)) pushChange(pkg, rel);
   });
 }
 // Tauri API/core minor pairing (offline-safe).
 const tauriCore = report.inventory.filter(x => x.name === 'tauri' && x.ecosystem === 'cargo'), tauriApi = report.inventory.filter(x => x.name === '@tauri-apps/api');
-if (tauriCore.length && tauriApi.length) {
+if (auditFrameworks && tauriCore.length && tauriApi.length) {
   const mm = v => v?.split('.').slice(0, 2).join('.');
   const ok = tauriCore.every(c => tauriApi.every(a => c.resolved && a.resolved && mm(c.resolved) === mm(a.resolved)));
   report.compatibility.push({ rule: 'tauri-api-same-minor', status: ok ? 'ok' : 'review', rust: tauriCore.map(x => x.resolved), js: tauriApi.map(x => x.resolved), source: 'https://v2.tauri.app/develop/updating-dependencies',
@@ -549,11 +602,11 @@ if (out) {
 if (json) console.log(JSON.stringify(report, null, 2));
 else {
   const L = [];
-  L.push(`# Desktop App Standard 0.7.3`, `Checked: ${checkedAt} · Mode: ${report.mode}${ciOnly ? ' (ci-only)' : ''}${dotnet ? ' · dotnet' : ''} · Collection: ${report.collectionComplete ? 'complete within declared bounds' : 'INCOMPLETE'} (not a release verdict)`);
-  if (!ciOnly && !dotnet) {
+  L.push(`# Desktop App Standard ${TOOL_VERSION}`, `Checked: ${checkedAt} · Mode: ${report.mode}${ciOnly ? ' (ci-only)' : ''}${dotnet ? ' · dotnet' : ''} · Collection: ${report.collectionComplete ? 'complete within declared bounds' : 'INCOMPLETE'} (not a release verdict)`);
+  if (auditFrameworks) {
     L.push('', '## 版本矩阵');
     for (const x of report.inventory) { const u = report.upstream.find(y => y.name === x.name && y.ecosystem === x.ecosystem);
-      L.push(`- ${x.ecosystem} ${x.name}: local=${x.resolved ?? 'UNKNOWN'} (${x.lockfile ?? 'no lock'}) · declared=${typeof x.declared === 'string' ? x.declared : '—'} · latest=${u?.latestStable ?? 'UNKNOWN'} · ${x.manifest}`); }
+      L.push(`- ${x.ecosystem} ${x.name}: local=${x.resolved ?? 'UNKNOWN'} (${x.lockfile ?? 'no lock'}) · declared=${typeof x.declared === 'string' ? x.declared : '—'} · upstream=${u?.latestStable ?? 'UNKNOWN'} · targetMajor=${x.targetMajor ?? 'auto'} · target=${u?.targetStable ?? 'UNKNOWN'} · ${x.manifest}`); }
     if (report.electronSupport) L.push(`- Electron 受支持 major: ${report.electronSupport.supportedMajors.join(', ')}（按官方政策计算；日期以 schedule 为准）`);
     if (nodePins.length) {
       const pins = nodePins.map(p => `${p.file}${p.line ? ':' + p.line : ''}=${p.major}${p.kind === 'file' ? ' (local)' : ''}`).join(' · ');

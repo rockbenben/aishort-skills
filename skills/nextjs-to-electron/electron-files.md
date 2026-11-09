@@ -158,8 +158,8 @@ function createStore(dir, filename = "app-state.json") {
     },
     set(key, value) {
       // Compare by value, not reference: windowState is a fresh object literal on every
-      // resize/move event, so `===` never matched it and each drag frame paid a synchronous
-      // writeFileSync on the main thread. Strings (the locale) deduped fine either way.
+      // save, so `===` never matches it. Value comparison also avoids writing unchanged
+      // bounds when the close handler flushes a completed resize.
       // Wrapped because JSON.stringify throws on a circular value: skipping a redundant
       // write must never be the thing that takes down the main process.
       try {
@@ -268,21 +268,28 @@ function createWindowStateKeeper(store) {
   const saved = store.get("windowState", { width: 1200, height: 800 });
 
   function track(win) {
-    const save = () => {
+    let pending = saved;
+    let timer;
+    const capture = () => {
       if (win.isMaximized()) {
-        // Keep last NORMAL bounds. Fall back to `saved` (always has width/height),
-        // not {} — else maximizing before any move/resize persists no size and the
-        // next launch restores to a default-sized, unplaced window.
-        const prev = store.get("windowState", saved);
-        store.set("windowState", { ...saved, ...prev, maximized: true });
+        pending = { ...pending, maximized: true };
       } else if (!win.isMinimized()) {
-        const b = win.getBounds();
-        store.set("windowState", { ...b, maximized: false });
+        pending = { ...win.getBounds(), maximized: false };
       }
     };
-    win.on("resize", save);
-    win.on("move", save);
-    win.on("close", save);
+    const flush = () => store.set("windowState", pending);
+    const schedule = () => {
+      capture(); // Keep the last normal bounds even if maximized before the timer fires.
+      clearTimeout(timer);
+      timer = setTimeout(flush, 150);
+    };
+    win.on("resize", schedule);
+    win.on("move", schedule);
+    win.on("close", () => {
+      capture();
+      clearTimeout(timer);
+      flush();
+    });
     if (saved.maximized) win.maximize();
   }
 
@@ -324,14 +331,14 @@ test("normal resize persists bounds with maximized:false", () => {
   const store = memStore();
   const win = fakeWin({ bounds: { x: 10, y: 20, width: 900, height: 700 } });
   createWindowStateKeeper(store).track(win);
-  win._fire("resize");
+  win._fire("close");
   assert.deepStrictEqual(store.raw().windowState, { x: 10, y: 20, width: 900, height: 700, maximized: false });
 });
 test("first-run maximize (before any move) still persists a size", () => {
   const store = memStore(); // empty
   const win = fakeWin({ maximized: true });
   createWindowStateKeeper(store).track(win);
-  win._fire("resize");
+  win._fire("close");
   const s = store.raw().windowState;
   assert.strictEqual(s.maximized, true);
   assert.strictEqual(s.width, 1200);  // NOT undefined — the bug the `saved` fallback prevents
@@ -341,10 +348,10 @@ test("un-maximize clears the maximized flag", () => {
   const store = memStore({ windowState: { x: 5, y: 6, width: 800, height: 600, maximized: false } });
   const win = fakeWin({ maximized: true, bounds: { x: 5, y: 6, width: 800, height: 600 } });
   createWindowStateKeeper(store).track(win);
-  win._fire("resize");                       // maximized save
+  win._fire("close");                       // maximized save
   assert.strictEqual(store.raw().windowState.maximized, true);
   win._setMaximized(false);
-  win._fire("resize");                       // restore
+  win._fire("close");                       // restore
   assert.strictEqual(store.raw().windowState.maximized, false);
 });
 test("saved.maximized triggers win.maximize() on track", () => {
@@ -588,40 +595,48 @@ jobs:
           files: dist-electron/*.zip
 ```
 
-### Hosting the workflow when the code lives on a side branch
-The "Run workflow" button only renders for workflows on the **default branch**, and a tag push only runs workflows present in the *tagged commit's tree*. So when the app code lives on a side branch, host the workflow **on `main`** and pin its checkout to that branch with `ref:` — one file then serves both the manual button and tag releases, and you keep **no** copy on the side branch (it would never run for a tag and would only drift). Keep it as a SEPARATE file alongside any existing desktop/Tauri workflow — don't overwrite that.
-```yaml
-name: Build Electron (Windows unpacked)
-on:
-  workflow_dispatch:        # manual "Run workflow" button (renders on the default branch)
-  push:
-    tags: ["v*"]            # also build on tag (add the release steps AND the `permissions: contents: write` block from the full template above — without that block the release step 403s); pinned ref below builds the side branch
-jobs:
-  build:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: feat/electron-desktop   # <-- pin to the branch that has electron/. Update if it merges/renames.
-      # Pin the Node major; desktop-app-standard's audit checks nodejs/Release (verify Electron's floor with `npm view electron engines`).
-      - uses: actions/setup-node@v7
-        with: { node-version: 26, cache: yarn }
-      - run: yarn install --frozen-lockfile
-      - run: yarn test:electron
-      - run: yarn electron:build
-      - uses: actions/upload-artifact@v7
-        with:
-          name: TextDiff-unpacked
-          path: dist-electron/win-unpacked
-          if-no-files-found: error
-```
+### Building code maintained on a side branch
+
+Tag the exact commit containing the Electron code and workflow. Keep the workflow in that
+commit, and let checkout use the triggering tag for releases. For a manual run, select that
+same tag in GitHub's workflow UI. Record the resolved commit SHA in the run summary.
 
 ### Variant: two desktop apps in one repo, released by one tag
-Only needed when the **same repo also ships another desktop app** (e.g. Tauri on its own branch) and you want **one tag to release both**. Don't reach for this for a single app — the single-branch model above is simpler.
 
-Key constraint: on a tag push, GitHub runs only the workflows present in the *tagged commit's tree*. A workflow living on a side branch will **not** run for a tag on `main`. So make `main` the release hub:
+Keep the workflows on the release branch. Commit a source map, such as
+`.github/desktop-sources.json`, in the commit receiving the release tag. Record each
+desktop branch's full commit SHA in the `electron` and `tauri` fields before tagging.
+This supports separate source branches and makes a rerun select the same source.
 
-- Keep both workflows **only on `main`**, each pinning checkout to its own feature branch (`ref: feat/electron-desktop`, `ref: feat/tauri-desktop`). Do **not** leave workflow copies on the feature branches — they never run for a tag (only the tagged `main` commit's tree does), they silently drift, and they mislead. Both the tag trigger *and* the manual "Run workflow" button work from `main`, and the pinned `ref` builds the branch code either way, so the side-branch copy buys nothing.
-- Let the Tauri workflow be the one that **creates the (draft) Release**; the Electron one triggers on `workflow_dispatch + push: tags`, builds, then **polls until that Release exists** (`gh release view "$TAG"` in a retry loop — Tauri compiles Rust and is much slower) and uploads the `win-unpacked` zip with `gh release upload "$TAG" … --clobber`.
-- **Make the git tag the single source of truth for the version** — on tag push, inject it before build in *both* workflows (`npm pkg set version="${GITHUB_REF_NAME#v}"`, guarded `if: github.event_name == 'push'`; the Tauri side then runs `update-version` to propagate it into `tauri.conf.json`). This makes the Tauri Release name (derived from the app version), the installer/zip names, and the tag all agree automatically. Without it, Electron uploads to `github.ref_name` while Tauri may name the Release from a stale `package.json` — so Electron polls a Release that never appears and times out, leaving an empty release.
-- Tag **only on `main`, on a commit whose tree already contains the corrected workflows** — a tag-triggered run uses the workflow from the *tagged commit*, not `main`'s tip, so fix-then-tag or the old definition runs (a stale tag can even skip the Electron build entirely if its `electron.yml` predates the `push: tags` trigger). The build uses each feature branch's current HEAD, so push the feature branches first. To rescue a broken/empty release, re-tag: `gh release delete vX --yes; git push origin :refs/tags/vX; git tag vX <fixed-commit>; git push origin vX`.
+For each workflow, checkout the tagged release commit to read the map, then checkout
+the recorded source commit. The Electron workflow uses the following steps. The Tauri
+workflow uses the `tauri` field.
+
+```yaml
+      - uses: actions/checkout@v7
+      - name: Read the Electron source commit from the tagged source map
+        id: source
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const { electron } = JSON.parse(fs.readFileSync(".github/desktop-sources.json", "utf8"));
+          if (!/^[0-9a-f]{40}$/i.test(electron)) throw new Error("electron must be a full commit SHA");
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `commit=${electron}\n`);
+          NODE
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.source.outputs.commit }}
+      - name: Set the release version from the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: npm pkg set version="${GITHUB_REF_NAME#v}"
+```
+
+Continue with dependency installation, tests and packaging after these steps. In the
+Tauri workflow, propagate the injected version into `tauri.conf.json` before building.
+
+Let one workflow create the draft. The other workflow waits for that draft and uploads
+its own assets to it. Verify both sets of assets before publishing the shared release.
+For manual rebuilds, select the release tag so the source map also comes from that tag.
+Keep a workflow copy in every commit that may itself receive a triggering tag.
