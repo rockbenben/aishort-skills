@@ -154,13 +154,10 @@ async function withServer(fn) {
 }
 
 test("CLI help/version works without opening a browser", async () => {
-  // One version everywhere: package.json is the source, the CLIs and SKILL.md follow it.
+  // The repository validator checks Skill metadata and lockfile consistency.
+  // Installed-package tests check the public CLI output against package.json.
   const { version } = JSON.parse(
     readFileSync(join(ROOT, "package.json"), "utf8"),
-  );
-  assert.match(
-    readFileSync(join(ROOT, "SKILL.md"), "utf8"),
-    new RegExp(`^version: ${version.replaceAll(".", "\\.")}$`, "m"),
   );
   for (const cli of ["render.mjs", "icons.mjs"]) {
     good(await run(cli, ["--help"], false));

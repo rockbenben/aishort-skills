@@ -65,15 +65,6 @@ atomic recovery across a crash or concurrent writers.
 
 ## Environment-specific execution
 
-For local templates, an environment-provided Chromium is often the simplest option. If your
-host exposes a shared browser for remote websites, follow its browser/sign-in rules rather
-than launching a second hidden remote browsing session. This standalone renderer is not an
-authentication workflow and does not inherit a user's login.
+Use an available trusted Chromium when practical. This renderer does not inherit the user's browser login; use an appropriate browser workflow for authenticated pages.
 
-On Linux, missing CJK/emoji fonts and missing Chromium shared libraries are host gaps, not
-skill gaps. Installing a font package (for example Debian/Ubuntu's `fonts-noto-cjk` and
-`fonts-noto-color-emoji`) is optional, Linux-only, and only needed when the user wants CJK
-or emoji glyphs and the host does not already have them. It requires administrator rights,
-so it belongs to the environment's setup or approval process — the skill never runs a
-privileged install on its own.
-
+Missing Chromium shared libraries or CJK/emoji fonts may require host setup. Install only what the requested rendering needs, following the environment's permissions. On Debian/Ubuntu, common font packages are `fonts-noto-cjk` and `fonts-noto-color-emoji`.
