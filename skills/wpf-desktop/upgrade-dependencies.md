@@ -1,6 +1,6 @@
 # 升级 WPF 应用的依赖
 
-按[任务入口](SKILL.md)确定升级范围。新项目在生成骨架后核对所需依赖。整体升级覆盖应用、共享库、测试、本地工具和 CI。局部修复只升级解决问题所需的包及其配套依赖，可直接跳到下方 NuGet 步骤。开始修改前用原工具链建立构建或测试基线。只读评估使用仓库文件、已有还原结果和包源，保持项目文件原样。
+按[任务入口](SKILL.md)确定升级范围。新项目在生成骨架后核对所需依赖。整体升级覆盖应用、共享库、测试、本地工具和 CI。局部修复可一并升级本次涉及的依赖及其配套包的兼容稳定补丁／次版本，不扩展为无关依赖的全面升级；可直接跳到下方 NuGet 步骤。开始修改前用原工具链建立构建或测试基线，可复用当前会话中同一代码状态的结果。只读评估使用仓库文件、已有还原结果和包源，保持项目文件原样。
 
 ## 对齐技能指定的大版本
 
@@ -21,6 +21,8 @@ $release | Select-Object 'latest-sdk','latest-runtime','support-phase','eol-date
 4. 检查项目使用的 Actions 和本地工具。保留各 Action 的 pin 形式，按技能指定的目标或未指定时的兼容稳定版更新。同步更新已有 .NET 工具清单并运行 `dotnet tool restore`。
 
 ## 更新 NuGet 包
+
+维护或依赖升级任务中，同一大版本内、兼容当前 TFM／平台的稳定补丁和次版本默认直接升级，测试框架与 runner 同样适用；无需单独询问或仅列作后续建议。检查包元数据、依赖约束和相关发布说明，不能仅凭版本号认定兼容。用户锁定版本、只读要求或仓库规则优先；存在已知破坏性变更、必须迁移 SDK／TFM 或无法验证时，说明具体阻碍。跨大版本升级按请求范围单独评估，不从这条默认规则推断授权。
 
 1. 按 NuGet.Config 的配置源和 source mapping 查询稳定版本。SDK 风格项目先还原，再用 `dotnet list <解决方案或项目> package --outdated` 盘点各目标框架中的直接依赖，另跑 `dotnet list <解决方案或项目> package --vulnerable --include-transitive`。处理大版本和开发依赖，保留明确选择的私有源。预览版只用于项目明确指定的通道。
 2. 对普通 PackageReference，.NET 10+ SDK 可执行 `dotnet package update <包名>@<已核实的版本> --project <项目路径>`。中央包管理在生效的 Directory.Packages.props 中更新 PackageVersion，检查条件、VersionOverride 及所有消费项目。遇到间接 MSBuild 属性或旧 SDK，直接编辑拥有版本的属性或引用并还原。旧式 packages.config 项目用该解决方案的 NuGet 更新流程同步引用。[dotnet package update](https://learn.microsoft.com/dotnet/core/tools/dotnet-package-update) · [中央包管理](https://learn.microsoft.com/nuget/consume-packages/central-package-management)
