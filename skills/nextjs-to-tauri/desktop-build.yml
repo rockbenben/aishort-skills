@@ -30,6 +30,8 @@
 #    `windows-x86_64` key from the .msi to the NSIS setup.exe, which changes what already
 #    shipped users receive on their next update — decide that on its own, not in passing.
 name: Build Desktop App
+env:
+  DESKTOP_RELEASE_MODE: manual
 
 on:
   workflow_dispatch:
@@ -49,11 +51,14 @@ jobs:
       contents: write
     outputs:
       id: ${{ steps.draft.outputs.id }}
+      commit: ${{ steps.draft.outputs.commit }}
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       TAG: ${{ github.ref_name }}
     steps:
+      - uses: actions/checkout@v7
+        with: { ref: '${{ github.sha }}' }
       - id: draft
         shell: bash
         run: |
@@ -69,6 +74,7 @@ jobs:
           fi
           id=$(gh release view "$TAG" -R "$REPO" --json databaseId --jq .databaseId)
           echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   publish-tauri:
     needs: draft
@@ -81,16 +87,21 @@ jobs:
       matrix:
         include:
           - platform: "macos-latest" # Apple Silicon
+            target: aarch64-apple-darwin
             args: "--target aarch64-apple-darwin"
           - platform: "macos-latest" # Intel
+            target: x86_64-apple-darwin
             args: "--target x86_64-apple-darwin"
           - platform: "ubuntu-22.04"
+            target: x86_64-unknown-linux-gnu
             args: ""
           - platform: "windows-latest"
+            target: x86_64-pc-windows-msvc
             args: ""
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
+        with: { ref: '${{ needs.draft.outputs.commit || github.sha }}' }
 
       # Root on the CI runner only. These two steps run INSIDE the GitHub Actions
       # ubuntu-22.04 container, as root, on a throwaway VM that is deleted after the job.
@@ -225,6 +236,32 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "v${APP_VERSION}" "<AppName>_${APP_VERSION}_x64_portable.exe" --clobber
 
+
+      - name: Record this target's built assets
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          EXTRA_ARTIFACTS: ${{ matrix.platform == 'windows-latest' && format('["<AppName>_{0}_x64_portable.exe"]', steps.tauri.outputs.appVersion) || '[]' }}
+          ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}
+          APP_VERSION: ${{ steps.tauri.outputs.appVersion }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          TARGET: ${{ matrix.target }}
+          SOURCE_COMMIT: ${{ needs.draft.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp "repos/$REPO/releases/${{ needs.draft.outputs.id }}/assets?per_page=100" > "$RUNNER_TEMP/draft-assets.json"
+          gh release download "$TAG" -R "$REPO" -p latest.json -O "$RUNNER_TEMP/build-feed.json" --clobber
+          node .github/scripts/release-assets.mjs record
+      - uses: actions/upload-artifact@v7
+        if: github.event_name == 'push'
+        with:
+          name: tauri-evidence-${{ matrix.target }}
+          path: release-evidence/*.json
+          if-no-files-found: error
+          overwrite: true
+
       # The pipeline ends in a manual step: the release is a DRAFT and the updater
       # resolves `releases/latest`, which ignores drafts — so nothing reaches users until
       # someone publishes it. Putting the link and that reminder in the run summary beats
@@ -244,35 +281,41 @@ jobs:
     needs: [draft, publish-tauri]
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       TAG: ${{ github.ref_name }}
       DRAFT_ID: ${{ needs.draft.outputs.id }}
+      SOURCE_COMMIT: ${{ needs.draft.outputs.commit }}
+      TARGETS: aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu x86_64-pc-windows-msvc
     steps:
-      - name: Verify all updater platforms before manual publication
+      - uses: actions/checkout@v7
+        with: { ref: '${{ needs.draft.outputs.commit }}' }
+      - uses: actions/setup-node@v7
+        with: { node-version: 26 }
+      - uses: actions/download-artifact@v8
+        with: { pattern: 'tauri-evidence-*', path: release-evidence, merge-multiple: true }
+      - name: Verify draft contents before manual publication
         shell: bash
         run: |
           set -euo pipefail
           gh release view "$TAG" -R "$REPO" --json isDraft --jq .isDraft | grep -qx true
           gh release download "$TAG" -R "$REPO" --dir dist
-          jq -e --arg version "${TAG#v}" '
-            .version == $version and
-            (.platforms | has("windows-x86_64") and has("darwin-aarch64") and
-             has("darwin-x86_64") and has("linux-x86_64"))' dist/latest.json
-          jq -er '.platforms[] | [.url, .signature] | @tsv' dist/latest.json > feed.tsv
-          while IFS=$'\t' read -r url signature; do
-            if [[ "$url" == "https://api.github.com/repos/$REPO/releases/assets/"* ]]; then
-              asset_id="${url%%\?*}"; asset_id="${asset_id##*/}"
-              [[ "$asset_id" =~ ^[0-9]+$ ]]
-              if [[ ! -f "$RUNNER_TEMP/draft-assets.json" ]]; then
-                gh api --paginate --slurp "repos/$REPO/releases/$DRAFT_ID/assets?per_page=100" > "$RUNNER_TEMP/draft-assets.json"
-              fi
-              name=$(jq -er --argjson id "$asset_id" '.[][] | select(.id == $id) | .name' "$RUNNER_TEMP/draft-assets.json")
-            else
-              [[ "$url" == "https://github.com/$REPO/releases/download/$TAG/"* ]] || exit 1
-              name=$(basename "${url%%\?*}")
-            fi
-            [[ -f "dist/$name" && -n "$signature" ]] || exit 1
-          done < feed.tsv
+          gh api --paginate --slurp "repos/$REPO/releases/$DRAFT_ID/assets?per_page=100" > "$RUNNER_TEMP/draft-assets.json"
+          rm -f dist/SHA256SUMS
+          APP_VERSION="${TAG#v}" node .github/scripts/release-assets.mjs verify
+          current=$(gh api "repos/$REPO/commits/$TAG" --jq .sha)
+          [[ "$current" == "$SOURCE_COMMIT" ]] || { echo "::error::Tag moved after build"; exit 1; }
+      - name: SHA256SUMS from verified assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          gh release upload "$TAG" -R "$REPO" SHA256SUMS --clobber
+      - uses: actions/attest@v4
+        with: { subject-checksums: dist/SHA256SUMS }

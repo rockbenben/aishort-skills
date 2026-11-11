@@ -1,16 +1,11 @@
 # Frontend integration templates
 
-Put every file below in **one `src/app/desktop/` folder**, not spread across `utils/` and
-`hooks/`. Desktop-only code mixed into shared directories is easy to lose: in the reference
-app a repo-sync script that mirrors `src/app/{hooks,utils,…}` in overwrite mode deleted
-`useAutoUpdate.ts` and `useLanguagePreference.ts` outright, because they existed in the target
-and not the source. One folder nothing else claims also keeps the whole desktop layer greppable
-and deletable in one move.
+The examples use `src/app/desktop/` to keep desktop code together. Use the project's existing boundary when it serves the same purpose. If repository-sync tools overwrite shared folders, exclude desktop-specific files or place them outside the overwritten paths.
 
 Add only the pieces you need. JS deps:
 
 ```bash
-yarn add @tauri-apps/plugin-opener@^2 @tauri-apps/plugin-updater@^2
+yarn add @tauri-apps/plugin-opener@^2 @tauri-apps/plugin-updater@^2 @tauri-apps/plugin-process@^2
 ```
 
 The plugins pull in `@tauri-apps/api` transitively, so you don't need it as a direct dep — **unless you add your own `#[tauri::command]`s**, whose `invoke` comes from there. Then add it, and reach for it with a dynamic `await import("@tauri-apps/api/core")` at the call site: a static import loads fine in a plain browser (it only throws when `invoke` runs) and quietly ships the whole package in the web bundle.
@@ -57,7 +52,7 @@ export const openExternalLink = async (url: string) => {
 };
 ```
 
-> Don't bother writing an `<ExternalLink>` wrapper component — you'd have to find and convert every link. The global click delegate below catches them all (gotcha #10).
+The example uses a global link delegate. Retain an existing link component when it already routes external URLs correctly; avoid installing both and opening links twice.
 
 ---
 
@@ -79,22 +74,42 @@ export interface UpdateCheckResult {
   version?: string;
   downloaded?: boolean;
   install?: () => Promise<void>;
+  close?: () => Promise<void>;
   error?: string;
 }
 
 export const checkForUpdates = async (skippedVersion = ""): Promise<UpdateCheckResult> => {
   if (!(await isTauri())) return { hasUpdate: false, error: "Not in Tauri" };
+  let update: import("@tauri-apps/plugin-updater").Update | null = null;
+  const close = async () => {
+    const current = update;
+    update = null;
+    await current?.close();
+  };
   try {
     const { check } = await import("@tauri-apps/plugin-updater");
-    const update = await check();
+    update = await check();
     if (!update) return { hasUpdate: false };
     if (update.version === skippedVersion) {
-      await update.close();
+      await close();
       return { hasUpdate: false };
     }
     await update.download(); // auto-download, install on confirm
-    return { hasUpdate: true, version: update.version, downloaded: true, install: () => update.install() };
+    return { hasUpdate: true, version: update.version, downloaded: true, close,
+      install: async () => {
+        const current = update;
+        if (!current) throw new Error("This update has already been released");
+        update = null; // Installation owns the resource until it finishes.
+        try {
+          await current.install(); // Windows exits here after starting its installer.
+          const { relaunch } = await import("@tauri-apps/plugin-process");
+          await relaunch(); // macOS/Linux need an explicit restart.
+        } finally {
+          await current.close().catch(error => console.error("Update cleanup failed:", error));
+        }
+      } };
   } catch (error) {
+    await close().catch(cleanupError => console.error("Update cleanup failed:", cleanupError));
     return { hasUpdate: false, error: String(error) };
   }
 };
@@ -119,40 +134,73 @@ export const useAutoUpdate = ({ startupDelay = 3000, checkInterval = 24 * 60 * 6
   const { modal, message } = App.useApp();
   const checkedStartup = useRef(false);
   const lastCheck = useRef(0);
+  const busy = useRef(false);
+  const mounted = useRef(true);
+  const pending = useRef<{result: UpdateCheckResult; destroy: () => void} | null>(null);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      pending.current?.destroy();
+      void pending.current?.result.close?.().catch(error => console.error("Update cleanup failed:", error));
+      pending.current = null;
+    };
+  }, []);
 
   const confirm = useCallback((r: UpdateCheckResult) => {
-    modal.confirm({
+    const dialog = modal.confirm({
       title: "Update Available",
       content: `Version ${r.version} downloaded. Install now and restart?`,
       okText: "Install Now",
       cancelText: "Skip This Version",
-      // install() relaunches the app, so a resolved promise normally never returns. Catch it
-      // anyway: on the portable exe (gotcha #8) and other install-layout failures it REJECTS,
-      // and an uncaught rejection here leaves the user staring at a dialog that did nothing.
       onOk: async () => {
         message.loading({ content: "Installing update…", key: "installing", duration: 0 });
         try {
-          await r.install?.();
+          if (!r.install) throw new Error("No downloaded update to install");
+          await r.install();
         } catch (e) {
           console.error("Install failed:", e);
-          message.destroy("installing");
           message.error("Installation failed. Please download the latest version manually.");
+        } finally {
+          message.destroy("installing");
+          await r.close?.().catch(error => console.error("Update cleanup failed:", error));
+          busy.current = false;
+          pending.current = null;
         }
       },
-      onCancel: () => { try { localStorage.setItem(SKIPPED_KEY, r.version!); } catch {} },
+      onCancel: async () => {
+        try { localStorage.setItem(SKIPPED_KEY, r.version!); } catch {}
+        try { await r.close?.(); }
+        catch (error) { console.error("Update cleanup failed:", error); }
+        finally { busy.current = false; pending.current = null; }
+      },
     });
+    pending.current = {result: r, destroy: () => dialog.destroy()};
   }, [modal, message]);
 
   const run = useCallback(async () => {
-    if (!(await isTauri())) return;
+    if (busy.current) return;
+    busy.current = true;
+    if (!(await isTauri())) { busy.current = false; return; }
     const now = Date.now();
-    if (now - lastCheck.current < 60 * 60 * 1000) return; // throttle 1h
+    if (now - lastCheck.current < 60 * 60 * 1000) { busy.current = false; return; } // throttle 1h
     lastCheck.current = now;
     let skipped = ""; try { skipped = localStorage.getItem(SKIPPED_KEY) || ""; } catch {}
     const r = await checkForUpdates(skipped);
-    if (r.hasUpdate && r.downloaded && r.version) {
-      confirm(r);
+    if (!mounted.current) {
+      await r.close?.().catch(error => console.error("Update cleanup failed:", error));
+      busy.current = false;
+      return;
     }
+    if (r.hasUpdate && r.downloaded && r.version) {
+      try { confirm(r); }
+      catch (error) {
+        await r.close?.().catch(cleanupError => console.error("Update cleanup failed:", cleanupError));
+        busy.current = false;
+        console.error("Update dialog failed:", error);
+      }
+    } else busy.current = false;
   }, [confirm]);
 
   useEffect(() => {
@@ -178,13 +226,7 @@ exactly as on the web. **Do NOT hard-navigate** (`window.location`) for a switch
 reload remounts the `[locale]` layout subtree, which resets `useRef` guards and re-fires
 any startup redirect — the bounce that makes switching look broken (gotcha #11).
 
-**The language is the user's to choose.** The app opens in the **configured default
-locale** — `DEFAULT_LOCALE` below, and the window's entry `url` in `tauri.conf.json` must
-point at the same locale. It never guesses the language from the OS and never stores a
-detected locale: the only locale it remembers is the one the user **explicitly picked**
-in the switcher, and the user can change that at any time. If you want to *offer* the
-system language, call `detectSystemLocale(valid)` from a UI that asks first ("Start in
-your system language?") and apply it only when the user accepts.
+Preserve the application’s language policy. The example starts at `DEFAULT_LOCALE`, matching the window's entry URL, and remembers explicit switcher choices. If the product uses system-language detection, validate the result against supported locales and fall back safely; keep an existing saved choice ahead of detection.
 
 Remembering the language across launches is **optional**. If you add it, two rules keep
 the launch-time redirect from fighting the switcher:
@@ -214,7 +256,10 @@ export const DEFAULT_LOCALE = "en";
 // The locale the USER picked in the language switcher. Nothing else writes this key.
 export const setPreferredLanguage = (l: string) => { try { localStorage.setItem(KEY, l); } catch {} };
 const read = () => { try { return localStorage.getItem(KEY); } catch { return null; } };
-const localeOf = (p: string) => p.match(/^\/([a-z]{2}(-[a-z]+)?)/i)?.[1] ?? null;
+const localeOf = (p: string, valid: string[]) => {
+  const segment = p.split("/")[1];
+  return valid.includes(segment) ? segment : null;
+};
 
 // Optional: detect the OS language to OFFER it. It is never applied or stored on its
 // own — call it from a UI that asks ("Start in your system language?"), and it returns
@@ -234,7 +279,7 @@ export function useLanguagePreference(valid: string[]) {
   const router = useRouter();
   useEffect(() => {
     if (sessionRedirectDone || !isTauriRuntime()) return;
-    const cur = localeOf(pathname);
+    const cur = localeOf(pathname, valid);
     if (!cur) return;
     sessionRedirectDone = true;
     // Only an EXPLICIT choice is honoured. With no stored choice the app falls back to
@@ -243,7 +288,8 @@ export function useLanguagePreference(valid: string[]) {
     // storage on this path.
     const pref = read() ?? DEFAULT_LOCALE;
     if (valid.includes(pref) && pref !== cur) {
-      router.replace(pathname.replace(/^\/[a-z]{2}(-[a-z]+)?/i, `/${pref}`)); // SOFT redirect, once
+      const next = `/${pref}${pathname.slice(cur.length + 1)}`;
+      router.replace(`${next}${window.location.search}${window.location.hash}`); // soft, once
     }
   }, [pathname, router, valid]);
 }
@@ -257,7 +303,9 @@ import { isTauriRuntime } from "@/app/desktop/externalLink";
 
 const onPick = (locale: string) => {
   if (isTauriRuntime()) setPreferredLanguage(locale);      // remember the explicit choice — the user's, and changeable at any time
-  const next = pathname.replace(/^\/[a-z]{2}(-[a-z]+)?/, `/${locale}`);
+  const segments = pathname.split("/");
+  segments[1] = locale;
+  const next = segments.join("/");
   router.push(`${next}${window.location.search}${window.location.hash}`); // SOFT nav — works in Tauri
 };
 ```
