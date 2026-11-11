@@ -37,6 +37,14 @@ const slugs = readdirSync(join(process.cwd(), "skills"), { withFileTypes: true }
     return i < 0 || process.argv[i + 1] === s;
   });
 
+if (process.argv.includes("--slug") && slugs.length === 0) {
+  const slug = process.argv[process.argv.indexOf("--slug") + 1];
+  console.error(slug && !slug.startsWith("--")
+    ? `audit-warnings: unknown skill "${slug}"`
+    : "audit-warnings: --slug requires a skill name");
+  process.exit(2);
+}
+
 const findingsOf = (html) => {
   const out = [];
   const blocks = html.split('<article class="static-analysis-finding">').slice(1);

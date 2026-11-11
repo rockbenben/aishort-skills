@@ -88,7 +88,7 @@ clawhub install nextjs-to-tauri
 
 ### [nextjs-to-electron](skills/nextjs-to-electron/) —— Next.js → Electron 桌面应用
 
-把纯客户端的 Next.js（App Router）静态导出包进一层薄薄的 Electron 外壳 —— 给**完全离线 / 内网**、缺 WebView2 运行时的 Windows 机器用，那种机器上 Tauri 起不来。 Electron 自带 Chromium（约 150 MB），所以直接能跑。`src/` 一行不动；所有桌面行为（语言持久化、窗口状态、单实例、系统托盘）都放在一层被动接线的 `electron/` 主进程里。价值在那些坑：`file://` 白屏陷阱、自定义 `app://` 协议、next-intl 静态导出 i18n，以及 electron-builder 打包。
+把纯客户端的 Next.js（App Router）静态导出包进一层薄薄的 Electron 外壳 —— 给**完全离线 / 内网**、缺 WebView2 运行时的 Windows 机器用，那种机器上 Tauri 起不来。 Electron 自带 Chromium（约 150 MB），所以直接能跑。优先用 `electron/` 主进程承接语言持久化、窗口状态、单实例和系统托盘，必要时调整静态导出或桌面集成代码，保留 Web 构建行为。价值在那些坑：`file://` 白屏陷阱、自定义 `app://` 协议、next-intl 静态导出 i18n，以及 electron-builder 打包。
 
 ```bash
 clawhub install nextjs-to-electron
@@ -99,7 +99,7 @@ clawhub install nextjs-to-electron
 
 ### [desktop-app-standard](skills/desktop-app-standard/) —— 按 house style 建与升 Tauri/Electron 桌面应用，并审计 .NET 运行时/SDK
 
-**建**：这套 house style 以十个短章节 + 随之而来的 workflow 模板的形式交付。最要紧的几条：六个目标（Windows/macOS/Linux × x64/arm64）、npm 且锁文件是唯一事实来源、Action 钉大版本标签（要更紧就钉精确版本，绝不钉完整 SHA）、不装 Dependabot、git tag 是唯一版本号、草稿 → 校验 → 审批 → 发布、必须内置 updater、公开后再签名、winget 清单归 winget-manifests 仓管而不是发布仓。
+**建**：这套 house style 以十个短章节和 workflow 模板交付，覆盖六个目标（Windows/macOS/Linux × x64/arm64）、npm 和锁文件、Action 大版本或精确版本标签、不装 Dependabot、git tag 作为版本源、测试和打包后直接公开、内置 updater、计算摘要和上传前完成签名，以及由 winget-manifests 统一维护 winget 清单。
 
 只给项目时，全面检查版本、安全配置、性能、打包和更新链路，并修复可验证的问题。新建或整体升级按技能的[目标大版本表](skills/desktop-app-standard/references/version-targets.json)更新依赖及锁文件。局部修复只做必要的配套升级。只读评估交付发现与证据。
 
@@ -130,11 +130,15 @@ scripts/              # validate-skills.mjs —— CI 卡发布用的 frontmatte
 .github/workflows/    # CI：校验、跑 md-web / html-shot / desktop-app-standard 的测试，然后在 push 时把变动的技能自动发布到 ClawHub
 ```
 
+仓库维护在根目录执行 `npm ci`、`npm test` 和 `npm run validate`。根目录包清单及锁文件只用于维护工具，不是单个 skill 的运行依赖。校验与发布共用锁定的 ClawHub 文件收集逻辑。`npm test` 默认检查全部 skill 的隔离安装和自测；CI 按变更 skill 选择对应测试，在 html-shot 的隔离安装中运行浏览器测试，仅 WPF 相关变更运行 Windows 打包测试。修改根工具或工作流时跑全套，PR 只测试不发布。触发描述可按[路由示例](docs/skill-routing.md)人工复核。
+
 ## 经验回传与维护
 
-只回传能改变后续项目判断或操作的经验。写入前说明触发条件、现有指导的具体缺口，以及应修改的模板、检查、测试或参考页；缺少可复用增量时，本次回传可以为空。
+技能版本统一写为 `metadata.version` 下的字符串。发布工具保留对历史顶层 `version` 字段的读取支持。修改已发布技能时递增补丁版本，并同步技能内的包清单与锁文件版本。
 
-- 优先修正已有落点。同一决策只保留一处指导，已有模板或测试承接的修复无需再追加项目经过。
-- 项目验收流水、测试总数、一次性耗时和逐次版本快照留在源项目。需要溯源时仅保留项目名与证据路径。
-- `VALIDATION.md` 按能力维护验证方式、证据入口和环境边界。合并更新同一行，区分模拟、实机与尚待验证的范围。
-- `SKILL.md` 保留通用任务入口。协议、平台或故障特有的方法放在对应参考小节，按任务读取。
+回传用于改进 skill。收到使用反馈后，结合现有内容判断是否存在可复用的缺口，直接修改相应指导、脚本、模板或测试，也可以删减无效或重复内容。没有值得改的地方就不改，无需单独编写经验记录。
+
+- 优先修改已有位置。同一决策只保留一处指导，不把单个项目的做法升级为通用要求。
+- 按改动验证效果；修复脚本或模板缺陷时，优先补能复现问题的回归测试。验证投入与改动相称。
+- `SKILL.md` 保留通用入口与关键指导，较长的专项细节按需放入参考文件。
+- 项目经过、测试总数、耗时和版本快照留在源项目。只有影响后续使用判断的环境限制或未验证范围才需简要保留；不要求创建或逐次更新 `VALIDATION.md`。

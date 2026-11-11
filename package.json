@@ -1,0 +1,14 @@
+{
+  "name": "aishort-skills-tools",
+  "private": true,
+  "scripts": {
+    "test": "node --test scripts/*.test.mjs",
+    "validate": "node scripts/validate-skills.mjs",
+    "publish:skill": "clawhub publish"
+  },
+  "devDependencies": {
+    "clawhub": "0.8.0",
+    "js-yaml": "4.3.2",
+    "semver": "7.8.6"
+  }
+}

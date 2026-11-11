@@ -8,13 +8,15 @@ on:
         required: false
         default: ""
   pull_request:
-    paths: ["skills/**", "scripts/**", ".github/workflows/**"]
+    paths: ["skills/**", "scripts/**", ".github/workflows/**", "package.json", "package-lock.json"]
   push:
     branches: [main]
     paths:
       - "skills/**"
       - "scripts/**"
       - ".github/workflows/**"
+      - "package.json"
+      - "package-lock.json"
 
 permissions:
   contents: read
@@ -34,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       skills: ${{ steps.list.outputs.skills }}
+      test-skills: ${{ steps.list.outputs.test-skills }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -43,7 +46,10 @@ jobs:
         with:
           node-version: "26"
 
-      - name: Determine which skills to publish
+      - name: Install repository tools
+        run: npm ci
+
+      - name: Determine skills to test and publish
         id: list
         env:
           EVENT: ${{ github.event_name }}
@@ -52,47 +58,38 @@ jobs:
           SHA: ${{ github.sha }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          set -uo pipefail
-          all_skills() {
-            find skills -mindepth 1 -maxdepth 1 -type d \
-              -exec test -f '{}/SKILL.md' ';' -print | sed 's#^skills/##'
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const git = (...args) => execFileSync('git', args, {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}).trim();
+          const all = fs.readdirSync('skills', {withFileTypes: true})
+            .filter(d => d.isDirectory() && fs.existsSync(`skills/${d.name}/SKILL.md`))
+            .map(d => d.name).sort();
+          const { EVENT, INPUT_SKILL = '', BEFORE, SHA, PR_BASE } = process.env;
+          let base = '', publish, tests;
+          if (EVENT === 'workflow_dispatch') {
+            if (INPUT_SKILL && !all.includes(INPUT_SKILL)) throw new Error('skill must name an existing skill directory under skills/');
+            publish = INPUT_SKILL ? [INPUT_SKILL] : all;
+            tests = publish;
+          } else {
+            if (EVENT === 'pull_request') {
+              base = PR_BASE;
+              if (!base) throw new Error('Missing pull request base');
+            } else {
+              base = BEFORE;
+              try { git('cat-file', '-e', `${base}^{commit}`); }
+              catch { try { base = git('rev-parse', 'HEAD^'); } catch { base = ''; } }
+            }
+            const changed = base ? git('diff', '--name-only', base, SHA).split('\n') : [];
+            const skills = base ? all.filter(skill => changed.some(file => file.startsWith(`skills/${skill}/`))) : all;
+            const shared = changed.some(file => /^(scripts\/|\.github\/workflows\/|package(?:-lock)?\.json$)/.test(file));
+            publish = EVENT === 'pull_request' ? [] : skills;
+            tests = shared ? all : skills;
           }
-          base=""
-          if [ "$EVENT" = "pull_request" ]; then
-            base="$PR_BASE"
-            dirs=""
-          elif [ "$EVENT" = "workflow_dispatch" ]; then
-            if [ -n "$INPUT_SKILL" ]; then
-              # One skill directory name and nothing else: this value reaches the
-              # publish job, and the publish job holds the registry token.
-              if ! printf '%s' "$INPUT_SKILL" | grep -qE '^[A-Za-z0-9._-]+$'; then
-                echo "::error::skill must be a single directory name (letters, digits, dot, dash, underscore)"; exit 1
-              fi
-              if [ "$INPUT_SKILL" = "." ] || [ "$INPUT_SKILL" = ".." ] || [ ! -f "skills/$INPUT_SKILL/SKILL.md" ]; then
-                echo "::error::skill must name an existing skill directory under skills/"; exit 1
-              fi
-              dirs="$INPUT_SKILL"
-            else
-              dirs="$(all_skills)"
-            fi
-          else
-            base="$BEFORE"
-            if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
-              base="$(git rev-parse HEAD^ 2>/dev/null || true)"
-            fi
-            if [ -z "$base" ]; then
-              dirs="$(all_skills)"
-            else
-              changed="$(git diff --name-only "$base" "$SHA" -- 'skills/' 2>/dev/null || true)"
-              dirs="$(printf '%s\n' "$changed" | grep '^skills/' | cut -d/ -f2 | sort -u || true)"
-              # keep only dirs that still have a SKILL.md (ignore deletes)
-              dirs="$(for d in $dirs; do [ -f "skills/$d/SKILL.md" ] && echo "$d"; done)"
-            fi
-          fi
-          json="$(printf '%s\n' "$dirs" | sed '/^$/d' | jq -R . | jq -cs .)"
-          echo "skills=$json" >> "$GITHUB_OUTPUT"
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-          echo "Will publish: $json"
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            `skills=${JSON.stringify(publish)}\ntest-skills=${JSON.stringify(tests)}\nbase=${base}\n`);
+          console.log('Test:', tests, 'Publish:', publish);
+          NODE
 
       # Gate the whole workflow: publish only runs if this passes. It catches the failures
       # that are invisible until after upload — frontmatter that is not valid YAML (OpenClaw
@@ -103,56 +100,58 @@ jobs:
         env:
           BASE: ${{ steps.list.outputs.base }}
         run: |
-          npm install --no-save --no-audit --no-fund js-yaml@4
           if [ -n "$BASE" ]; then
             node scripts/validate-skills.mjs --changed-since "$BASE"
           else
             node scripts/validate-skills.mjs
           fi
 
-      # The md-web viewer fetches the Markdown it renders from a route in the URL
-      # fragment, and its lifecycle writes replace the bucket's whole configuration
-      # (S3 has no per-rule API). A regression in either is invisible in review and
-      # destructive in production, and nothing else in this workflow would notice.
-      - name: Test review regressions
-        run: node --test scripts/review-regressions.test.mjs
+      - name: Use the runner's browser for html-shot
+        if: contains(fromJson(steps.list.outputs.test-skills), 'html-shot')
+        run: |
+          CHROME="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          if [ -n "$CHROME" ]; then
+            echo "HTML_SHOT_EXECUTABLE=$CHROME" >> "$GITHUB_ENV"
+          fi
+
+      # Root regressions are lightweight. Installation tests select only affected
+      # Skills and run html-shot's browser suite from its single isolated install.
+      - name: Test repository and selected Skill installations
+        env:
+          TEST_SKILLS: ${{ steps.list.outputs.test-skills }}
+        run: npm test
 
       - name: Test md-web
+        if: contains(fromJson(steps.list.outputs.test-skills), 'md-web')
         run: |
           node scripts/test-md-web-viewer.mjs
           node scripts/test-md-web-lifecycle.mjs
           node scripts/test-md-web-publish.mjs
 
-      # html-shot ships a browser-driven suite: unit tests for the shared helpers and
-      # local-only end-to-end tests (HTTP, transparency, containers, failure paths,
-      # icons). They run against a real Chromium, so this step is what stops a
-      # regression from reaching ClawHub. The runner already has Chrome — use it
-      # instead of downloading Playwright's browser on every push.
-      - name: Test html-shot
-        run: |
-          cd skills/html-shot
-          npm ci
-          CHROME="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
-          if [ -n "$CHROME" ]; then
-            echo "using system browser: $CHROME"
-            export HTML_SHOT_EXECUTABLE="$CHROME"
-          else
-            node node_modules/playwright/cli.js install chromium
-          fi
-          npm run test:all
-
-      # desktop-app-standard has a Node test suite over its
-      # scripts (version comparison, lockfile parsing, template self-checks, a mocked
-      # online run, .NET TFM/SDK fixtures). The shared metadata parser uses js-yaml
-      # installed above. The tests need no network,
-      # so they are the cheapest guard in this workflow — and without this step
-      # nothing would run them.
-      - name: Test desktop-app-standard
-        run: node --test skills/desktop-app-standard/tests/*.test.mjs
+  wpf-packaging:
+    needs: detect
+    if: contains(fromJson(needs.detect.outputs.test-skills), 'wpf-desktop')
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+      - run: npm ci
+      - run: node --test scripts/desktop-release-regressions.test.mjs
 
   publish:
-    needs: detect
-    if: github.event_name != 'pull_request' && needs.detect.outputs.skills != '[]'
+    needs: [detect, wpf-packaging]
+    if: >-
+      ${{ !cancelled() && github.event_name != 'pull_request' &&
+          needs.detect.result == 'success' && needs.detect.outputs.skills != '[]' &&
+          (needs.wpf-packaging.result == 'success' || needs.wpf-packaging.result == 'skipped') }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -165,8 +164,8 @@ jobs:
         with:
           node-version: "26"
 
-      - name: Install ClawHub CLI
-        run: npm install -g clawhub
+      - name: Install repository tools
+        run: npm ci
 
       - name: Authenticate
         run: |
@@ -180,7 +179,6 @@ jobs:
         env:
           SKILL: ${{ matrix.skill }}
         run: |
-          npm install --no-save --no-audit --no-fund js-yaml@4
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import { parseSkillMetadata, getSkillVersion } from './scripts/skill-metadata.mjs';
@@ -193,4 +191,4 @@ jobs:
           SKILL: ${{ matrix.skill }}
           VERSION: ${{ steps.version.outputs.value }}
           CLAWHUB_CONFIG_PATH: /tmp/clawhub/config.json
-        run: clawhub publish "skills/$SKILL" --version "$VERSION"
+        run: npm run publish:skill -- "skills/$SKILL" --version "$VERSION"

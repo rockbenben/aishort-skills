@@ -88,7 +88,7 @@ clawhub install nextjs-to-tauri
 
 ### [nextjs-to-electron](skills/nextjs-to-electron/) — Next.js → Electron desktop app
 
-Wrap a client-side Next.js (App Router) static export in a thin Electron shell — for **fully-offline / intranet** Windows machines that lack the WebView2 runtime, where Tauri won't launch. Electron ships its own Chromium (~150 MB), so it just runs. `src/` stays untouched; all desktop behavior (language persistence, window-state, single-instance, system tray) lives in a passively-wired `electron/` main-process layer. The value is the gotchas: the `file://` white-screen trap, the custom `app://` protocol, next-intl static-export i18n, and electron-builder packaging.
+Wrap a client-side Next.js (App Router) static export in a thin Electron shell — for **fully-offline / intranet** Windows machines that lack the WebView2 runtime, where Tauri won't launch. Electron ships its own Chromium (~150 MB), so it just runs. Prefer the `electron/` main process for locale persistence, window state, single-instance and tray behavior; adjust export or desktop integration code when needed while preserving the web build. The value is the gotchas: the `file://` white-screen trap, the custom `app://` protocol, next-intl static-export i18n, and electron-builder packaging.
 
 ```bash
 clawhub install nextjs-to-electron
@@ -99,7 +99,7 @@ clawhub install nextjs-to-electron
 
 ### [desktop-app-standard](skills/desktop-app-standard/) — build or upgrade a Tauri/Electron app to our house style, and audit .NET runtime/SDK
 
-**Building:** the skill ships that house style as ten short sections plus the workflow templates it implies. The ones that bite: six targets (Windows/macOS/Linux × x64/arm64), npm with the lockfile as the only source of truth, Actions pinned by major tag (an exact version when you need to be tighter, never a full SHA), no Dependabot, the git tag as the single version, draft → verify → approve → publish, an updater built in, signing once the release is public, and the winget manifest owned by `winget-manifests` rather than by your repo.
+**Building:** the skill ships that house style as ten short sections plus workflow templates. It covers six targets (Windows/macOS/Linux × x64/arm64), npm with a lockfile, Actions pinned by major tag or exact version, no Dependabot, the git tag as the version source, tests and packaging followed by direct publication, an updater, signing before checksums and upload, and winget manifests maintained in `winget-manifests`.
 
 A repository-wide review checks versions, security settings, performance, packaging and updates, then addresses demonstrated issues. New apps and whole-project upgrades follow the skill’s [declared major versions](skills/desktop-app-standard/references/version-targets.json). Focused fixes change the dependencies they require. Read-only assessments report gaps and evidence.
 
@@ -130,11 +130,23 @@ scripts/              # validate-skills.mjs — the frontmatter, bundle membersh
 .github/workflows/    # CI: validates, tests md-web, html-shot and desktop-app-standard, then auto-publishes changed skills to ClawHub on push
 ```
 
+Repository maintenance uses `npm ci`, `npm test` and `npm run validate` at the
+repository root. The root package and lockfile are maintenance tools, not runtime
+dependencies of individual skills. Validation and publishing share the locked
+ClawHub file collector. `npm test` checks all isolated skill installations and
+self-tests by default. CI selects tests for changed skills, runs browser tests
+inside html-shot's isolated installation, and runs Windows packaging tests only
+for WPF changes. Root tooling or workflow changes run the full suite. Pull
+requests test without publishing. Trigger descriptions can be reviewed against
+[routing examples](docs/skill-routing.md).
+
 ## Experience feedback and maintenance
 
-Keep experience that changes a decision or action in a later project. Before adding it, identify the trigger, the concrete gap in existing guidance, and the template, check, test or reference to update. A review may produce no skill changes when there is no reusable addition.
+Store skill versions as quoted strings in `metadata.version`. The publish tooling also reads legacy top-level `version` fields when comparing historical releases. Bump the patch version when changing a published skill and keep its package manifests in sync.
 
-- Update the existing resource first. Keep guidance for the same decision in one place, and avoid repeating project history already addressed by a template or test.
-- Keep project execution logs, test totals, individual timings and successive version snapshots in the source project. Retain only the project name and evidence path when provenance is needed.
-- Maintain `VALIDATION.md` by capability, with the verification method, evidence location and environment limits. Update the existing row and distinguish simulation, device testing and pending validation.
-- Keep general task routing in `SKILL.md`. Put protocol, platform and fault-specific methods in the relevant reference section for use when the task calls for them.
+Use feedback to improve the skill. Compare it with the existing content, identify any reusable gap, and directly update the relevant guidance, script, template or test. Remove ineffective or duplicated content when appropriate. If no useful change is needed, leave the skill as is; a separate experience record is unnecessary.
+
+- Update the existing resource first. Keep guidance for the same decision in one place, and avoid turning a single project's approach into a universal requirement.
+- Verify the affected behavior. For script or template defects, prefer a regression test that reproduces the problem. Keep verification proportional to the change.
+- Keep general routing and essential guidance in `SKILL.md`, with longer specialized details in references loaded as needed.
+- Keep project history, test totals, timings and version snapshots in the source project. Briefly retain only environment limits or unverified behavior that affect future use; creating or updating `VALIDATION.md` after every task is not required.

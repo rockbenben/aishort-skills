@@ -10,40 +10,28 @@
  * skill.md and skills.md as well as SKILL.md; this repo ships SKILL.md, and the validator is
  * the stricter of the two on purpose.
  *
- * It also models which files the publish bundle actually carries. The CLI's listTextFiles()
- * (dist/skills.js, read at 0.8.0; publish.js:39 calls it) walks with its own readdir loop,
- * which skips every entry whose name starts with "." — file or directory — plus node_modules/,
- * and then drops anything whose extension is outside the text allowlist
- * (dist/schema/textFiles.js). A real file on disk can therefore be invisible to an install.
- * These local checks model that inspected version. Publishing installs the current CLI,
- * whose own validation remains authoritative if its bundle rules change.
- * ClawHub itself does not enforce metadata.openclaw.files: that field is not in its metadata schema
- * (dist/schema/schemas.js), the CLI never parses the frontmatter at all, and publish uploads
- * every text file the bundler collected regardless of it, so declaring a file neither lets it
- * in nor keeps it out. This validator still checks each declaration against disk and the
- * modeled bundle, because a stale entry there is a documentation bug worth failing on.
- *
- * One thing this model leaves out on purpose: listTextFiles() also seeds the skill folder's own
- * .gitignore, .clawhubignore and .clawdhubignore into its matcher, and matching those faithfully
- * takes the `ignore` package's semantics rather than a line matcher. The consequence is one-sided
- * — a skill that ignores one of its own text files is modeled here as shipping it.
+ * Uses the pinned ClawHub CLI's listTextFiles() so ignore files, text extensions,
+ * and installed resources match the publisher. Root tooling is installed with npm ci.
+ * metadata.openclaw.files is checked as a resource declaration, not an upload filter.
  *
  * Usage:
  *   node scripts/validate-skills.mjs
  *   node scripts/validate-skills.mjs --changed-since <git-ref>   # also require a version bump
  *
- * Needs js-yaml (npm install --no-save js-yaml@4). Parsing with a real YAML parser is the
+ * Needs the root development dependencies (npm ci). Parsing with a real YAML parser is the
  * point of the strictest check here: OpenClaw parses frontmatter as YAML and silently falls
  * back to a single-line parser when that fails, which drops the whole nested
  * metadata.openclaw block. A plain scalar holding ": " is enough to trigger it.
  */
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join, relative } from "node:path";
+import { join, relative, resolve, dirname } from "node:path";
+import semver from "semver";
+import { listTextFiles } from "clawhub/dist/skills.js";
 
 const { parseSkillMetadata, getSkillVersion } = await import("./skill-metadata.mjs").catch((error) => {
   if (error.code !== "ERR_MODULE_NOT_FOUND" || !error.message.includes("'js-yaml'")) throw error;
-  console.error("validate-skills: js-yaml is not installed.\n  npm install --no-save js-yaml@4");
+  console.error("validate-skills: js-yaml is not installed.\n  npm ci");
   process.exit(2);
 });
 
@@ -57,13 +45,6 @@ const since = process.argv.includes("--changed-since")
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024;
 const MAX_FILE_COUNT = 10_000;
-// The extensions listTextFiles() is willing to upload. Anything else — images, fonts, binaries
-// — stays in the repo and out of the bundle, which is why README artwork lives at the root.
-const TEXT_EXTENSIONS = new Set([
-  "md", "mdx", "txt", "json", "json5", "yaml", "yml", "toml", "js", "cjs", "mjs", "ts", "tsx",
-  "jsx", "py", "sh", "rb", "go", "rs", "swift", "kt", "java", "cs", "cpp", "c", "h", "hpp",
-  "sql", "csv", "ini", "cfg", "env", "xml", "html", "css", "scss", "sass", "svg",
-]);
 // The description is the skill's trigger contract, so it is allowed to be wordy: it
 // carries the trigger phrases the agent matches on. OpenClaw's authoring guide aims for
 // "one line, under 160 characters", but the workshop linter treats over-160 as advisory,
@@ -78,30 +59,13 @@ const DESC_SOFT_LIMIT = 160;
 // returns process.platform. "macos" (the value the format reference's example uses) never matches.
 const OS_VALUES = ["darwin", "linux", "win32"];
 const INSTALL_KINDS = ["brew", "node", "go", "uv"];
-const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const validVersion = value => typeof value === "string" && /^\d/.test(value) && value.trim() === value && semver.valid(value);
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 let failures = 0;
 let warnings = 0;
 const fail = (skill, msg) => { console.error(`  FAIL  ${skill}: ${msg}`); failures++; };
 const warn = (skill, msg) => { console.error(`  warn  ${skill}: ${msg}`); warnings++; };
-
-// The paths clawhub would actually upload for this skill dir, as skill-relative paths.
-function bundleFiles(dir) {
-  const out = [];
-  const step = (current) => {
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      // Skipped wholesale, subtree included — this is how a .nojekyll disappears.
-      if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === ".git") continue;
-      const p = join(current, entry.name);
-      if (entry.isDirectory()) step(p);
-      else if (entry.isFile() && TEXT_EXTENSIONS.has(entry.name.split(".").pop().toLowerCase()))
-        out.push(relative(dir, p).replace(/\\/g, "/"));
-    }
-  };
-  step(dir);
-  return out;
-}
 
 // A files: entry may be a literal path or a "dir/**" prefix, which is how md-web ships its server.
 const declaredFileExists = (dir, pattern) =>
@@ -154,10 +118,10 @@ for (const dirent of readdirSync(SKILLS, { withFileTypes: true })) {
 
   // Use the same version resolution as the publish workflow and historical comparison.
   const version = getSkillVersion(meta);
-  if (typeof version !== "string" || !SEMVER.test(version))
+  if (!validVersion(version))
     fail(skill, `version must be valid semver, got ${JSON.stringify(version)}`);
 
-  const bundled = bundleFiles(dir);
+  const bundled = (await listTextFiles(dir)).map(file => file.relPath);
   const ships = new Set(bundled);
 
   const oc = meta.metadata?.openclaw;
@@ -167,6 +131,8 @@ for (const dirent of readdirSync(SKILLS, { withFileTypes: true })) {
     for (const f of oc.files ?? []) {
       if (!declaredFileExists(dir, f)) { fail(skill, `metadata.openclaw.files lists "${f}", which is not on disk`); continue; }
       // On disk is not enough: a declared file the bundler drops never reaches anyone.
+      if (f.endsWith("/**") && !bundled.some(file => file.startsWith(f.slice(0, -2))))
+        fail(skill, `metadata.openclaw.files lists "${f}", which has no files in the publish bundle`);
       if (!f.endsWith("/**") && !ships.has(f))
         fail(skill, `metadata.openclaw.files lists "${f}", which clawhub never uploads (dot-named or off the text allowlist)`);
     }
@@ -198,6 +164,19 @@ for (const dirent of readdirSync(SKILLS, { withFileTypes: true })) {
   );
   for (const p of referenced)
     if (!ships.has(p)) fail(skill, `SKILL.md points at {SKILL_DIR}/${p}, which clawhub never uploads`);
+
+  for (const file of bundled.filter(file => file.endsWith(".md"))) {
+    const markdown = readFileSync(join(dir, file), "utf8")
+      .replace(/^```[^\n]*\n[\s\S]*?^```[^\n]*$/gm, "")
+      .replace(/`[^`\n]+`/g, "");
+    for (const match of markdown.matchAll(/\]\(([^\s()]+)\)/g)) {
+      const target = match[1].split("#")[0];
+      if (!target || /^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
+      const resource = relative(dir, resolve(dirname(join(dir, file)), decodeURIComponent(target))).replace(/\\/g, "/");
+      if (!ships.has(resource) && !bundled.some(path => path.startsWith(resource.replace(/\/$/, "") + "/")))
+        fail(skill, `${file} links to "${target}", which is outside the publish bundle`);
+    }
+  }
 
   // A bump that misses package.json leaves a private package versioned differently from the
   // skill that ships it, and the lockfile has to agree with package.json or npm ci refuses.
@@ -258,8 +237,13 @@ for (const dirent of readdirSync(SKILLS, { withFileTypes: true })) {
     }
     if (changed) {
       const before = versionAt(since, `${rel}/SKILL.md`);
-      if (before && before === version)
-        fail(skill, `content changed since ${since} but version is still ${version}; bump it or ClawHub refuses the release`);
+      if (before && validVersion(version)) {
+        if (!validVersion(before)) fail(skill, `historical version "${before}" is invalid; choose a valid comparison baseline`);
+        else if (before === version)
+          fail(skill, `content changed since ${since} but version is still ${version}; bump it or ClawHub refuses the release`);
+        else if (!semver.gt(version, before))
+          fail(skill, `version ${version} must increase from ${before}; use the maintenance branch baseline for an older release line`);
+      }
     }
   }
 
