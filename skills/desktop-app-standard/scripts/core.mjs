@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const TOOL_VERSION = '0.9.1';
+export const TOOL_VERSION = '0.9.15';
 export const exact = v => typeof v === 'string' && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(v) && v.split('.').every(n => Number.isSafeInteger(Number(n))) ? v : null;
 export function compare(a, b) {
   if (!exact(a) || !exact(b)) return null;

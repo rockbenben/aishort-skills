@@ -1,6 +1,6 @@
 # 官方来源与动态核验
 
-资料编写核验日期：2026-11-03。日期只表示本次编辑核验，不保证未来仍适用。每次执行重查当前状态，不复制日期声称已复核。
+按任务查询相关上游来源，核对目标版本与平台；历史笔记不代表当前仍适用。
 
 | 主题 | 首选来源 | 核验内容 |
 |---|---|---|
@@ -27,7 +27,7 @@
 | builder 签名 | https://www.electron.build/docs/features/code-signing | CSC_LINK、azureSignOptions、notarize 环境变量及版本变化 |
 | Electron Forge | https://www.electronforge.io/ | 仅项目使用 Forge 时读取其打包/签名/发布规范 |
 | GitHub 安全 | https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions | 最小权限、可信代码、第三方 Action 引用方式、secrets |
-| workflow 锁文件 | https://docs.github.com/actions/concepts/security/workflow-dependency-lockfiles · https://docs.github.com/en/actions/how-tos/secure-your-work/lock-workflow-dependencies | 当前可用性与边界。**2026-11-03 核验：官方「Who can use」只列 GitHub Enterprise Cloud，且 how-to 建议配 Dependabot——本仓 house style（公开/个人仓、不装 Dependabot）用不上，因此维持 Action 大版本标签，不引入 `.github/workflows/actions.lock` 与 `gh actions-lock`。** 生成器、覆盖范围（transitive action 依赖，不含 `jobs.<id>.uses` 指向的 reusable workflow）与「采用锁文件后不必再钉完整 SHA」的说法每次重查；若哪天公开/个人仓也能用，再重新评估这条否决 |
+| workflow 锁文件 | https://docs.github.com/actions/concepts/security/workflow-dependency-lockfiles · https://docs.github.com/en/actions/how-tos/secure-your-work/lock-workflow-dependencies | 需要采用时核对账户可用性、生成器、依赖覆盖和更新方式，再决定是否适合现有 pin 策略。 |
 | Artifact attestations | https://github.com/actions/attest | v4 权限（id-token/attestations/artifact-metadata）、subject-checksums |
 | winget-releaser | https://github.com/vedantmgoyal9/winget-releaser | classic PAT 范围、首版需手工提交、仅对已发布 release 有效 |
 | 事件不递归 | https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow | GITHUB_TOKEN 产生的事件不触发新 workflow（dispatch 除外） |

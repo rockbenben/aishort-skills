@@ -1,9 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { discoverApplications, workflowApplications } from '../scripts/app-context.mjs';
+
 import { exact, compare, stableMax, minor, cargoPackages, workflowHints, usageHints, requestJson, releaseHistory, parseJson5,
   parseYarnLock, parsePnpmLock, parseBunLock, resolveFromLock, electronSupportedMajors, nodeSupportFacts, classifyNotes, changelogSections, refVersion } from '../scripts/core.mjs';
-import { stripComments, runTraps, defaultContext, TRAPS } from '../scripts/ci-traps.mjs';
+import { stripComments, runTraps, defaultContext, TRAPS, workflowCoverage } from '../scripts/ci-traps.mjs';
 
+test('a shared Rust workspace does not turn a sibling Electron app into Tauri', () => {
+  const apps = discoverApplications([{file: 'z/src-tauri/tauri.conf.json'}], [
+    {name: 'electron', ecosystem: 'npm', manifest: 'a/package.json'},
+    {name: 'tauri', ecosystem: 'cargo', manifest: 'Cargo.lock'},
+  ], ['package.json', 'a/package.json']);
+  assert.deepEqual(apps.map(app => [app.directory, app.isTauri, app.hasElectron]), [['a', false, true], ['z', true, false]]);
+});
+
+test('workflow paths prefer the closest app and run defaults do not affect actions', () => {
+  const applications = [{directory: '.', isTauri: true}, {directory: 'a', isTauri: true}];
+  const workflow = ['on: push', 'defaults:', '  run:', '    working-directory: a', 'jobs:', '  build:', '    steps:',
+    '      - uses: tauri-apps/tauri-action@v1', '      - uses: tauri-apps/tauri-action@v1', '        with:',
+    '          projectPath: a', '      - run: cargo tauri build', ''].join('\n');
+  const scopes = workflowApplications('release.yml', workflow, applications);
+  assert.deepEqual(scopes.map(scope => scope.application), ['.', 'a', 'a']);
+  const reused = workflowApplications('release.yml', 'jobs:\n  build:\n    uses: ./.github/workflows/shared.yml\n', applications);
+  assert.equal(reused[0].application, null);
+  assert.match(reused[0].reason, /reusable workflow/);
+});
 test('stable version comparison is numeric and rejects ranges/prereleases', () => {
   assert.equal(compare('2.10.0', '2.9.9'), 1);
   assert.equal(compare('2.1.0', '2.1.0'), 0);
@@ -155,6 +176,12 @@ test('draft created but never published is P0', () => {
   const f = runTraps([{ file: 'w.yml', text: yml }], defaultContext({ isTauri: true })).find(x => x.id === 'draft-never-published');
   assert.equal(f.severity, 'P0'); assert.equal(f.line, 11); assert.equal(f.confidence, 'heuristic');
 });
+
+test('an explicit manual release mode keeps a verified draft for human publication', () => {
+  const workflow = "env:\n  DESKTOP_RELEASE_MODE: manual\njobs:\n  build:\n    steps:\n      - uses: tauri-apps/tauri-action@v1\n        with:\n          releaseDraft: true\n";
+  assert.equal(scan(workflow).includes('draft-never-published'), false);
+  assert.equal(scan(workflow.replace('DESKTOP_RELEASE_MODE: manual', 'DESKTOP_RELEASE_MODE: automatic')).includes('draft-never-published'), true);
+});
 test('a throwing trap is reported through onError instead of looking clean', () => {
   const trap = { id: 'test-throw', severity: 'P1', applies: () => true, test: () => { throw new Error('boom'); } };
   TRAPS.push(trap);
@@ -183,11 +210,22 @@ test('npm: bare `npm install` in CI is flagged; npm ci, global tools, named pack
   assert.equal(scan("jobs:\n  a:\n    steps:\n      - name: npm install\n        run: npm ci\n", ctx).includes('npm-install-not-ci'), false);
   assert.equal(scan(job('npm ci'), ctx).includes('npm-ci-without-lockfile'), false);
 });
-test('Electron >= 42 runtime download: npm projects are told npx install-electron (a bin, not an npm script)', () => {
+test('Electron >= 42 runtime download: npm uses the installed Electron script; local bins remain recognized', () => {
   const yml = "jobs:\n  a:\n    steps:\n      - run: npm ci\n      - run: npx electron-builder --win nsis --publish never\n";
   const f = runTraps([{ file: 'w.yml', text: yml }], defaultContext({ electronMajor: 45, lockfiles: { npm: 'package-lock.json' } })).find(x => x.id === 'electron-runtime-download');
-  assert.ok(f); assert.match(f.fix, /npx install-electron/);
+  assert.ok(f); assert.match(f.fix, /node node_modules\/electron\/install\.js/);
   assert.equal(scan(yml.replace('      - run: npx electron', '      - run: npx install-electron\n      - run: npx electron'), { electronMajor: 45 }).includes('electron-runtime-download'), false);
+  for (const command of [
+    'node node_modules/electron/install.js',
+    'node ./node_modules/electron/install.js',
+    'node "node_modules/electron/install.js"',
+    'node .\\node_modules\\electron\\install.js',
+  ]) {
+    const fixed = yml.replace('      - run: npx electron', `      - run: ${command}\n      - run: npx electron`);
+    assert.equal(scan(fixed, { electronMajor: 45 }).includes('electron-runtime-download'), false, command);
+  }
+  assert.ok(scan(yml + '      # node node_modules/electron/install.js\n', { electronMajor: 45 }).includes('electron-runtime-download'));
+  assert.ok(scan(yml.replace('      - run: npm ci', '      - run: npm ci\n      - run: node node_modules/electron/not-install.js'), { electronMajor: 45 }).includes('electron-runtime-download'));
 });
 test('winget must follow publish; release:published is flagged (GITHUB_TOKEN does not trigger it)', () => {
   const ok = "jobs:\n  publish:\n    steps:\n      - run: gh api -X PATCH x -F draft=false -f make_latest=true\n  winget:\n    needs: publish\n    steps:\n      - uses: vedantmgoyal9/winget-releaser@x\n";
@@ -233,15 +271,6 @@ test('tagName from ref is judged in its own job, not by a marker elsewhere', () 
   const yml = "on:\n  push:\n    tags: [v*]\npermissions:\n  contents: write\njobs:\n  validate:\n    if: github.ref_type == 'tag'\n    steps:\n      - run: echo ok\n  build:\n    steps:\n      - uses: tauri-apps/tauri-action@v1\n        with:\n          tagName: ${{ github.ref_name }}\n";
   assert.ok(scan(yml, { isTauri: true }).includes('tagname-from-ref-unasserted'));
 });
-test('release-tauri template resolves API asset URLs as well as direct URLs', async () => {
-  const fs = await import('node:fs'); const path = await import('node:path'); const { fileURLToPath } = await import('node:url');
-  const t = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../templates/workflows/release-tauri.yml'), 'utf8');
-  assert.match(t, /api\.github\.com\/repos\//, 'template lost the API asset URL branch');
-  assert.ok(t.includes('releases/$DRAFT_ID/assets?') && t.includes('select(.id == $id) | .name'),
-    'API asset IDs must resolve within the current draft');
-  const bs = String.fromCharCode(92);
-  assert.ok(t.includes('basename ' + '"${url%%' + bs + '?*}"'), 'template lost the direct download URL branch');
-});
 test('every trap has a unique id and P0/P1/P2 severity', () => {
   const ids = TRAPS.map(t => t.id); assert.equal(new Set(ids).size, ids.length);
   for (const t of TRAPS) assert.match(t.severity, /^P[012]$/);
@@ -257,4 +286,52 @@ test('Yarn does not resolve an unmatched declaration from a unique candidate', (
   const resolved = resolveFromLock('yarn', lock, { name: 'electron', declared: '^41.0.0' });
   assert.equal(resolved.version, null);
   assert.deepEqual(resolved.candidates, ['40.0.1']);
+});
+
+test('release permissions belong to the uploading job and job maps replace inherited permissions', () => {
+  const workflow = ['permissions:', '  contents: read', 'jobs:', '  other:', '    permissions: { contents: write }',
+    '    steps:', '      - run: echo ok', '  upload:', '    steps:', '      - uses: softprops/action-gh-release@v3', ''].join('\n');
+  assert.ok(scan(workflow).includes('release-permissions'));
+  assert.ok(!scan(workflow.replace('  upload:', '  upload:\n    permissions: { contents: write }')).includes('release-permissions'));
+  assert.ok(!scan(workflow.replace('  upload:', '  upload:\n    permissions: { contents: "write" }')).includes('release-permissions'));
+  const inherited = workflow.replace('  contents: read', '  contents: write');
+  assert.ok(!scan(inherited).includes('release-permissions'));
+  assert.ok(scan(inherited.replace('  upload:', '  upload:\n    permissions: { actions: read }')).includes('release-permissions'));
+  const token = workflow + '        with:\n          token: ${{ secrets.RELEASE_TOKEN }}\n';
+  assert.ok(!scan(token).includes('release-permissions'));
+});
+
+test('latest status does not publish a draft', () => {
+  const workflow = 'jobs:\n  upload:\n    steps:\n      - uses: softprops/action-gh-release@v3\n        with:\n          draft: true\n          make_latest: false\n';
+  assert.ok(scan(workflow).includes('draft-never-published'));
+  assert.ok(!scan(workflow + '      - run: gh release edit v1.0.0 --draft=false\n').includes('draft-never-published'));
+  assert.ok(!scan(workflow + '  publish:\n    steps:\n      - uses: softprops/action-gh-release@v3\n        with:\n          draft: false\n').includes('draft-never-published'));
+});
+
+test('workflow coverage distinguishes checks, publishers, manual mode and delegation', () => {
+  const files = [
+    {file: 'ci.yml', text: 'on: [pull_request]\njobs:\n  test:\n    steps:\n      - run: npm test'},
+    {file: 'tag.yml', text: 'on:\n  push:\n    tags: [v*]\njobs:\n  test:\n    steps:\n      - run: npm test'},
+  ];
+  assert.deepEqual(workflowCoverage(files), {pullRequest: ['ci.yml'], release: [], delegated: [], manual: []});
+  files.push({file: 'release.yml', text: 'env:\n  DESKTOP_RELEASE_MODE: manual\njobs:\n  build:\n    steps:\n      - run: gh release upload v1.0.0 app.exe'});
+  files.push({file: 'reuse.yml', text: 'jobs:\n  release:\n    uses: owner/repo/.github/workflows/release.yml@v1'});
+  assert.deepEqual(workflowCoverage(files), {pullRequest: ['ci.yml'], release: ['release.yml'], delegated: ['reuse.yml'], manual: ['release.yml']});
+});
+
+test('a build-only Tauri action does not claim release coverage or need a write token', () => {
+  const text = 'on: push\njobs:\n  build:\n    steps:\n      - uses: tauri-apps/tauri-action@v1\n      - run: echo pull_request\n';
+  assert.deepEqual(workflowCoverage([{file: 'ci.yml', text}]), {pullRequest: [], release: [], delegated: [], manual: []});
+  assert.ok(!scan(text).includes('release-permissions'));
+  const publish = text.replace('      - run: echo pull_request', '        with:\n          tagName: v1.0.0');
+  assert.deepEqual(workflowCoverage([{file: 'ci.yml', text: publish}]).release, ['ci.yml']);
+  assert.ok(scan(publish).includes('release-permissions'));
+});
+
+test('a custom release uploader is delegated evidence requiring script inspection', () => {
+  const text = 'on: push\njobs:\n  upload:\n    permissions:\n      contents: write\n    steps:\n      - run: node scripts/release-draft.mjs dist\n';
+  const coverage = workflowCoverage([{file: 'release.yml', text}]);
+  assert.deepEqual(coverage.release, []);
+  assert.deepEqual(coverage.delegated, ['release.yml']);
+  assert.deepEqual(workflowCoverage([{file: 'ci.yml', text: text.replace('      contents: write', '      contents: read')}]).delegated, []);
 });

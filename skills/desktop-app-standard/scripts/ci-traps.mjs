@@ -47,6 +47,41 @@ const RELEASE_CREATORS = /tauri-apps\/tauri-action|action-gh-release|ncipollo\/r
 const BUILDS = /tauri-apps\/tauri-action|electron-builder|tauri build|electron-forge|\bmake\b|--(win|mac|linux)\b/;
 const isReleaseWorkflow = t => RELEASE_CREATORS.test(t) || /^\s*tags:/m.test(t);
 
+function publishesRelease(text) {
+  if (/action-gh-release|ncipollo\/release-action|gh release (create|upload)|--publish\s+(always|onTag)/.test(text)) return true;
+  return /tauri-apps\/tauri-action/.test(text) && /(?:tagName|releaseId):\s*\S/.test(text);
+}
+
+// Static evidence only. A delegated workflow needs inspection in its own repository.
+export function workflowCoverage(files) {
+  const workflows = files.map(({file, text}) => ({file, text: stripComments(text)}));
+  return {
+    pullRequest: workflows.filter(w => /\bpull_request\b/.test(w.text.split(/^jobs:/m)[0])).map(w => w.file),
+    release: workflows.filter(w => jobBlocks(w.text).some(job => publishesRelease(job.text))).map(w => w.file),
+    delegated: workflows.filter(w => /^\s+uses:\s*(?:\.\/\.github\/workflows\/|[^\s]+\/\.github\/workflows\/)/m.test(w.text) ||
+      jobBlocks(w.text).some(job => /\bnode\s+[^\n]*(?:release|publish)[^\s]*\.m?js\b/.test(job.text) &&
+        /contents:\s*write|GH_TOKEN:|GITHUB_TOKEN:/.test(job.text))).map(w => w.file),
+    manual: workflows.filter(w => /^\s*DESKTOP_RELEASE_MODE:\s*['"]?manual['"]?\s*$/m.test(w.text)).map(w => w.file),
+  };
+}
+
+function missingReleasePermission(t) {
+  const header = t.split(/^jobs:/m)[0];
+  for (const job of jobBlocks(t)) {
+    const creator = find(RELEASE_CREATORS, job.text);
+    if (!creator || !publishesRelease(job.text)) continue;
+    // An explicit token may have permissions independent of GITHUB_TOKEN.
+    if (/(?:token:|GH_TOKEN:|GITHUB_TOKEN:)[^\n]*(?:secrets\.(?!GITHUB_TOKEN\b)|inputs\.)/.test(job.text)) continue;
+    const own = /^    permissions:[^\n]*(?:\n {6}[^\n]*)*/m.exec(job.text)?.[0];
+    const effective = own ?? header;
+    if (/['"]?contents['"]?\s*:\s*['"]?write\b|permissions:\s*['"]?write-all\b/.test(effective)) continue;
+    return {index: job.offset + creator.index,
+      detail: `发布 job ${job.name} 未声明有效的 contents: write；其他 job 的权限不会继承到这里。`,
+      fix: '核对该 job 的有效 permissions 和 token 来源，仅向需要上传或公开的 job 授予 contents: write。'};
+  }
+  return null;
+}
+
 export const TRAPS = [
   // ---------- P0: delivery silently broken ----------
   { id: 'rust-cache-workspace', severity: 'P0', applies: c => c.isTauri,
@@ -57,11 +92,11 @@ export const TRAPS = [
       return { index: m.index, detail: `\`${m.match[0]}\` 已退役，job 会以配置错误立即失败，看起来像工作流 bug。`, fix: '升级到当前 major 并核验 v4+ 的同名产物不可覆盖语义。' }; } },
   { id: 'draft-never-published', severity: 'P0', applies: () => true,
     test: t => { const m = find(/releaseDraft:\s*true|gh release create[^\n]*--draft|draft:\s*true/, t); if (!m) return null;
-      if (/draft=false|-F\s+draft=false|--draft=false|make_latest|gh release edit[^\n]*--draft=false/.test(t)) return null;
-      return { index: m.index, detail: 'release 以草稿创建，但本工作流中没有发布草稿的步骤。updater 读的是 `releases/latest`，它忽略草稿：构建成功、没人收到更新。', fix: '在受保护 environment 审批后的单一 publish job 中 `PATCH draft=false make_latest=true` 并断言 `releases/latest` 指向该 tag；若有意人工发布，在 release 说明中写明并标为已接受。' }; } },
+      if (/^[ \t]*DESKTOP_RELEASE_MODE:[ \t]*['"]?manual['"]?[ \t]*$/m.test(t)) return null;
+      if (/draft=false|^\s*(?:draft|releaseDraft):\s*false\b/m.test(t)) return null;
+      return { index: m.index, detail: 'release 以草稿创建，但本工作流中没有公开步骤，updater 无法通过 releases/latest 读取草稿。', fix: '默认直接使用 draft: false / releaseDraft: false；明确采用草稿的项目补上自动公开步骤，或记录人工发布约定。' }; } },
   { id: 'release-permissions', severity: 'P0', applies: () => true,
-    test: t => { const m = find(RELEASE_CREATORS, t); if (!m || /contents:\s*write|write-all/.test(t)) return null;
-      return { index: m.index, detail: '工作流创建/上传 release，但没有授予 `contents: write`；默认 token 只读，发布步骤会失败并可能留下半成品草稿。', fix: '仅在 stage/publish job 授予 `contents: write`，其余 job 保持 `contents: read`。' }; } },
+    test: missingReleasePermission },
   { id: 'tagname-from-ref-unasserted', severity: 'P0', applies: () => true,
     // The assertion must be in the job that reads tagName: a ref_type check in an
     // unrelated publish job says nothing about what this job packed.
@@ -106,8 +141,9 @@ export const TRAPS = [
   // ---------- P1: will bite, or breaks a platform/user group ----------
   { id: 'electron-runtime-download', severity: 'P1', applies: c => (c.electronMajor ?? 0) >= 42,
     test: (t, c) => { const inst = find(/npm ci|npm install|yarn install|yarn\s*$|pnpm install|bun install/m, t); const pack = find(/electron-builder|electron-forge|npx electron|(?:yarn|pnpm|bun)(?: run)? (?:dist|package|make|electron:build)\b|npm run (?:dist|package|make|electron:build)\b/, t);
-      if (!inst || !pack || /install-electron|install-app-deps|electron-rebuild|@electron\/rebuild/.test(t)) return null;
-      return { index: pack.index, detail: 'Electron 42 起不再在 postinstall 下载二进制，`ELECTRON_SKIP_BINARY_DOWNLOAD` 已移除。**打包本身不受影响**：electron-builder 会自己下载 Electron 发行包（app-builder-lib 的 downloadElectronArtifactZip），node_modules/electron/index.js 在首次被 require 时也会按需自下载。真正变的是**下载时机**——从「npm ci 时」挪到「第一次用到时」：离线/气隙 runner 会在那一刻才失败，e2e 里启动 Electron 会在测试步骤里触发下载，自定义 electronDist 指向 node_modules/electron/dist 也会拿不到东西。', fix: `安装依赖后显式运行 \`${c.yarnFlavor ? 'yarn run install-electron' : c.lockfiles.pnpm ? 'pnpm exec install-electron' : 'npx install-electron'}\`（是 electron 包的 bin，不是 npm script：npm 下用 npx，不要 \`npm run\`），把下载固定在安装步骤里；e2e 等会启动 Electron 的步骤同理。` }; } },
+      const directInstall = /\bnode\s+["']?(?:\.[\\/])?node_modules[\\/]electron[\\/]install\.js(?:["']|\s|$)/m.test(t);
+      if (!inst || !pack || directInstall || /install-electron|install-app-deps|electron-rebuild|@electron\/rebuild/.test(t)) return null;
+      return { index: pack.index, detail: 'Electron 42 起不再在 postinstall 下载二进制，`ELECTRON_SKIP_BINARY_DOWNLOAD` 已移除。**打包本身不受影响**：electron-builder 会自己下载 Electron 发行包（app-builder-lib 的 downloadElectronArtifactZip），node_modules/electron/index.js 在首次被 require 时也会按需自下载。真正变的是**下载时机**——从「npm ci 时」挪到「第一次用到时」：离线/气隙 runner 会在那一刻才失败，e2e 里启动 Electron 会在测试步骤里触发下载，自定义 electronDist 指向 node_modules/electron/dist 也会拿不到东西。', fix: `安装依赖后显式运行 \`${c.yarnFlavor ? 'yarn run install-electron' : c.lockfiles.pnpm ? 'pnpm exec install-electron' : 'node node_modules/electron/install.js'}\`（npm 直接调用已安装包的脚本；Yarn/pnpm 可用本地 bin，不要 \`npm run\`），把下载固定在安装步骤里；e2e 等会启动 Electron 的步骤同理。` }; } },
   { id: 'electron-builder-empty-csc-link', severity: 'P1', applies: c => c.hasElectron,
     test: t => { const m = /^[ \t]*(?:CSC_LINK|WIN_CSC_LINK)[ \t]*:[ \t]*(.+)$/m.exec(t);
       if (!m || !/secrets\./.test(m[1])) return null;   // a literal path is fine
@@ -198,6 +234,12 @@ export const TRAPS = [
   { id: 'checksum-crlf', severity: 'P1', applies: () => true,
     test: t => { const m = find(/(Set-Content|Out-File)[^\n]*SHA256SUMS|SHA256SUMS[^\n]*(Set-Content|Out-File)/i, t); if (!m) return null;
       return { index: m.index, detail: 'PowerShell `Set-Content`/`Out-File` 在 Windows 写 CRLF，`sha256sum -c` 会把 `\\r` 当作文件名一部分，Linux/macOS 上全部 FAILED。', fix: '在 Linux job 用 `sha256sum` 生成，或用 `[IO.File]::WriteAllText` + `\\n` 拼接，或 scripts/checksums.mjs。' }; } },
+  { id: 'archive-incomplete-directory', severity: 'P1', applies: () => true,
+    test: t => { const m = find(/Compress-Archive[^\n]*-Path\s+[^\n]*(?:\*|Join-Path)/i, t); if (!m || !/dotnet publish/.test(t)) return null;
+      return {index: m.index, detail: '发布目录用通配符交给 Compress-Archive，隐藏资源可能被跳过；仅验证源目录无法发现缺包。', fix: '完整目录用 tar 打包，保留原生库与外置资源，并从独立解包目录运行 smoke。本地和 CI 调用同一打包脚本。'}; } },
+  { id: 'checksum-self-reference', severity: 'P1', applies: () => true,
+    test: t => { const m = find(/sha256sum\s+\*[^\n]*>\s*SHA256SUMS(?:\.txt)?/i, t); if (!m) return null;
+      return {index: m.index, detail: '通配符生成校验和会在重跑时读入旧 SHA256SUMS，产生自引用。', fix: '使用明确资产列表或显式排除校验和自身，缺摘要失败；检查重跑结果及所有必需文件。'}; } },
   { id: 'privileged-trigger', severity: 'P1', applies: () => true,
     test: t => { const m = find(/pull_request_target|workflow_run/, t); if (!m) return null;
       return { index: m.index, detail: '提权触发器：若 checkout/执行 PR 代码或消费其产物，可能泄露 secrets 或污染 release。', fix: '不可信代码只在 `pull_request`（无 secrets）中运行；提权 workflow 只处理可信数据。' }; } },
@@ -234,11 +276,11 @@ export const TRAPS = [
       return { index: m.index, detail: '`on: release: published` 不会被 GITHUB_TOKEN 发布的 release 触发（GitHub 防递归规则）。由 CI 发布草稿时，这个工作流会静默不运行。', fix: '改为发布工作流中的后续 job（`needs: publish`），或由 publish job 用 `gh workflow run`（workflow_dispatch 不受该限制，需要 `actions: write`）；只有人工在网页发布时才可依赖 release 事件。' }; } },
 ];
 
-export function runTraps(files, ctx, onError) {
+export function runTraps(files, ctx, onError, rules = TRAPS) {
   const findings = [];
   for (const { file, text } of files) {
     const t = stripComments(text);
-    for (const trap of TRAPS) {
+    for (const trap of rules) {
       if (!trap.applies(ctx)) continue;
       let r = null;
       // A trap that throws has NOT checked anything: report it as an error instead of

@@ -7,10 +7,14 @@ Electron 官方支持最新三个稳定 major，且每条受支持稳定线只�
 - 查询 Electron 精确目标 release，列出 Chromium/Node/V8、最低 OS、架构变化；系统 Node 与 Electron 内置 Node 不是同一运行时。
 - 保持现有 Forge/builder 方案。分别查询 Electron、打包器、updater 的稳定发行，按兼容区间更新每个已用组件。
 - 对原生模块检查 Node/Electron ABI、N-API 支持、目标架构、`@electron/rebuild`（旧名 `electron-rebuild` 已弃用）和 ASAR unpack；不能把 `npm test` 在系统 Node 下成功当作原生模块在 Electron 中可用。
-- Electron 42 起不再在 postinstall 下载二进制（首次运行时下载，`ELECTRON_SKIP_BINARY_DOWNLOAD` 已移除）；CI 与打包前显式 `npx install-electron`（Yarn：`yarn run install-electron`）。后续版本仍以目标包与官方文档为准。[Electron 42 发布说明](https://www.electronjs.org/blog/electron-42-0)
-- Electron 44 起不再发布 32 位（Windows ia32、Linux armv7l；v43.5.1 的 win32-ia32 有 6 个资产，v44.0.0 为 0）；house style 只发 x64 + arm64。
-- 从配置的 npm 源安装[技能指定大版本](version-targets.json)内的最新兼容稳定版。遇到上游移除目标架构等限制时，记录受影响的包和未达成的目标。迁移旧项目可查[带日期的历史案例](adopt-checklist.md)。
+- Electron 42 起不再在 postinstall 下载二进制（首次运行时下载，`ELECTRON_SKIP_BINARY_DOWNLOAD` 已移除）；CI 与打包前显式 `node node_modules/electron/install.js`（Yarn：`yarn run install-electron`）。后续版本仍以目标包与官方文档为准。[Electron 42 发布说明](https://www.electronjs.org/blog/electron-42-0)
+- 目标架构以所选 Electron 版本的官方发布资产为准；house style 默认 x64 + arm64，不以旧版本的架构支持推断当前仍可构建。
+- 从配置的 npm 源安装[技能指定大版本](version-targets.json)内的最新兼容稳定版。遇到上游移除目标架构等限制时，记录受影响的包和未达成的目标。迁移时按[升级采用清单](adopt-checklist.md)筛选受影响能力。
 - 较旧应用可先到受支持的安全过渡线，再逐 major 处理适用 breaking changes；明确最终目标及暂缓期限。
+
+安装二进制时，npm 优先直接调用已安装 electron 包的 `install.js`，路径按 workspace
+实际安装位置调整，避免本地 bin 缺失时 npx 回落到 registry 上同名的 `install-electron` 包。
+Yarn PnP 等不使用 `node_modules` 的项目沿用包管理器的本地 bin 调用。
 
 ## 安全基线
 
@@ -49,4 +53,4 @@ Electron 官方支持最新三个稳定 major，且每条受支持稳定线只�
 - Windows `nsis`（双架构合一安装包 + 单一 `latest.yml`）；macOS `dmg` + `zip`；Linux `AppImage` + `deb` + `rpm`。
 - electron-builder 的命令行 target 会覆盖配置中的 target 列表。目标统一放在配置中，命令行只选平台与架构；需要临时指定 target 时核对最终产物，避免漏掉 portable 等配置目标。
 - 原生模块：交叉架构需在对应 runner 上 rebuild（如 Linux arm64 用 `ubuntu-22.04-arm`），不能只在 x64 上交叉打包。
-- 签名见 release-flow.md；electron-builder 大版本升级时核验签名配置位置（v27 alpha 计划把 mac 签名移到 `mac.sign`；stable 仍按 v26 文档）。
+- 签名见 [发布流程](release-flow.md)；electron-builder 大版本升级时按实际安装版本核对签名配置，不照搬预发布计划。

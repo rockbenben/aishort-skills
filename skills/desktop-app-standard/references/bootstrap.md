@@ -17,7 +17,7 @@ npm create "tauri-app@${scaffoldVersion:?先设置脚手架版本}"
 # 从目标大版本表和包源取三个实际稳定版本，分别赋给以下变量
 npm i -D "electron@${electronVersion:?}" "electron-builder@${builderVersion:?}"
 npm i "electron-updater@${updaterVersion:?}"
-npx install-electron             # Electron ≥ 42 不再在 postinstall 下载运行时
+node node_modules/electron/install.js # Electron ≥ 42 不再在 postinstall 下载运行时
 # 保留生成的 package-lock.json，CI 用 npm ci
 ```
 
@@ -49,16 +49,28 @@ Electron 新项目需要可执行入口：在 package.json 指定主进程文件
 | [references/version-targets.json](version-targets.json) | `.github/desktop-version-targets.json`，与工作流一起纳入版本控制 |
 | templates/workflows/ci.yml | `.github/workflows/ci.yml` |
 | templates/workflows/release-tauri.yml 或 release-electron.yml | `.github/workflows/release.yml` |
-| templates/desktop-policy.example.json | `.desktop-policy.json`（只在需要偏离时写 deviations） |
+| templates/desktop-policy.example.json | 仅需记录偏离时创建 `.desktop-policy.json` |
 
-模板里的 Action 标签和 Node 版本来自编写时的环境。复制后核实当前的稳定 release、Active LTS 及 runner 要求，实际更新工作流。随后执行 `node "{SKILL_DIR}/scripts/audit.mjs" "<repo>" --ci-only` 复查。发布审批和 token 权限见[发布流程](release-flow.md)。
+模板里的 Action 标签和 Node 版本来自编写时的环境。复制后核实当前的稳定 release、Active LTS 及 runner 要求，实际更新工作流。随后执行 `node "{SKILL_DIR}/scripts/audit.mjs" "<repo>" --ci-only` 复查。直接发布和 token 权限见[发布流程](release-flow.md)。
 
 ## 7. 首次发布检查
 
-1. `node "{SKILL_DIR}/scripts/audit.mjs" "<repo>"`：框架 P0/P1 和 CI P0 为零。
-2. 推 `v0.1.0`：构建 job 全绿（Tauri 矩阵 6 个；Electron 每 OS 一 job，3 个）；草稿只有一个；`latest.json` / `latest*.yml` 覆盖所有平台。
-3. 审批 `release` environment 后，`releases/latest` 指向新 tag，匿名可下载 feed。
-4. 在每个 OS 上安装 v0.1.0，再发 v0.1.1，验证**真实的 N→N+1 更新**（下载、验签、安装、重启、数据保留）。这一步之前不要对外宣布“自动更新可用”。
-5. 签名未就绪时，release 说明写明 SmartScreen / Gatekeeper 提示与打开方式。
-6. 要上 winget：把新应用加进 `winget-manifests` 的 `apps.json`（清单由那条流水线生成并开 PR），**不要**在本仓里再提交一份 manifest。
-7. 只有**不在** winget-manifests 流水线里的发布者：首个版本手工提交到 microsoft/winget-pkgs，之后取消 release 模板里 winget job 的注释，设 `vars.WINGET_ID` 与 `secrets.WINGET_TOKEN`。两条路只能选一条。
+1. 运行审计，核对框架和 CI 发现。确认 tag 的版本源与测试门禁。
+2. 推送可信 tag，检查托管构建和直接发布结果。Tauri 矩阵逐平台补齐 Release，最终 latest.json 覆盖全部支持目标；Electron 单一发布器等待所有平台构建完成。
+3. 匿名下载安装包与 feed，核对版本、摘要、签名和真实更新载体。
+4. 在目标 OS 安装 N，再发布 N+1，验证下载、验签、重启与数据保留，记录实际环境。
+5. 发布说明列出签名状态、平台/架构和下载选择。winget 沿用已有唯一提交渠道。
+
+## 适配已有应用的 workflow
+
+1. 从应用入口和锁文件确定 app root、Cargo root、包管理器、Node/Rust 与构建脚本。monorepo 逐应用列出这些值，版本读取和发布路径使用同一应用。
+2. 对 run 步骤设置实际 working-directory；checkout、setup-node 的 cache-dependency-path、rust-cache workspaces、tauri-action projectPath、artifact path 和版本读取分别设置。Action 的路径输入独立于 defaults.run.working-directory。
+3. npm 使用 npm ci；pnpm 先安装项目指定版本，再设置 setup-node 的 pnpm cache 和 lockfile 路径，执行 pnpm install --frozen-lockfile。Yarn 按现有版本安装并冻结锁文件，Corepack 在缓存步骤前准备好。根目录 npm 和子目录 pnpm 都要验证干净安装。
+4. 把 lint/typecheck/test/build 换成已核实的项目命令。测试已含类型检查时复用它。承诺的检查缺失时明确补齐或报告缺口。需要启动 Electron 的测试先安装该应用实际解析到的 Electron 运行时。
+5. 核对输出目录、各架构命名、provider 与 channel。Electron 默认示例仅支持稳定版；采用 beta 时同步修改 tag 校验、清单生成、上传 glob、验证文件名和公开端点，确认稳定用户和 beta 用户各自能更新。
+6. 上传前生成发布说明，使用本 tag 的变更和实际资产列表，说明平台、推荐下载包、便携版更新方式、签名状态及校验入口。沿用已有 changelog 时链接真实存在的版本段。
+7. 从安装后的 skill 复制模板及声明的脚本，在目标应用检查 YAML、安装、构建、测试和公开下载。随后按授权范围验收托管 runner 与真实安装升级。
+
+Tauri 同时复制 `scripts/release-assets.mjs` 到 `.github/scripts/release-assets.mjs`。默认 verify-release 只核对公开资产和更新 feed，不需要可选的构建证据。Electron 复制 `scripts/delivery-checks.mjs` 到 `.github/scripts/delivery-checks.mjs`，将模板中的 `electron-builder.yml` 换成真正生效的配置路径；NSIS 设置 installerLanguages: [en_US]、displayLanguageSelector: false。YAML 校验复用应用已安装的解析器（含 electron-builder 的依赖），不另装技能依赖；继承或动态配置先提供实际生效的 builder JSON。运行模板实际调用的检查，缺文件应先适配。
+
+Tauri 模板串行更新共享 latest.json。需缩短耗时时先记录各目标与总耗时，再试验并行构建独立 artifacts、单一汇总 job 生成 feed；覆盖缺架构、错误签名和部分重跑后再替换当前流程。

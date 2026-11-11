@@ -1,7 +1,6 @@
-# House style（默认做法，核验于 2026-10-28）
+# House style（默认做法）
 
-用户确认（2026-10-23）：**按当前最新推荐做法执行，不受早期草稿限制**；尽量多平台、主要用 npm、Action 钉大版本标签、不装 Dependabot。
-具体版本在目标仓库的新建或升级任务中查询，并按[依赖升级流程](upgrade-dependencies.md)落地。这里的例子保留了编写时的环境。
+以下是本技能的新项目默认值。保留用户明确选择和已有项目约束；具体版本在新建或升级时按[依赖升级流程](upgrade-dependencies.md)查询并落地。
 
 ## 优先级
 
@@ -12,7 +11,7 @@
 
 新建和升级应用时，本次请求已涵盖范围内的本地改动和验证。对明确的支持契约记录约束及复查条件。只读巡检输出差距和证据。
 
-复制 [policy 模板](../templates/desktop-policy.example.json) 时保留空的 `deviations`。有实际决定后再添加条目，例如限制平台时填写 `{"rule":"platforms","value":["windows-x64"],"reason":"首发仅支持 Windows x64","revisitWhen":"完成 ARM64 安装验收"}`；接受某个发现时用它的 id 作为 `rule`。
+默认做法统一由本文说明，policy 仅保留脚本读取的平台和偏离，不复制发布流程或签名规则。无需为每个项目创建 policy；确需记录取舍时再复制 [policy 模板](../templates/desktop-policy.example.json)，保留空的 `deviations`。有实际决定后再添加条目，例如限制平台时填写 `{"rule":"platforms","value":["windows-x64"],"reason":"首发仅支持 Windows x64","revisitWhen":"完成 ARM64 安装验收"}`；接受某个发现时用它的 id 作为 `rule`。
 
 ## 平台与产物
 
@@ -25,6 +24,7 @@
 - 默认覆盖全部 6 个目标。runner 不可用（如私有仓库没有 arm runner）时用交叉编译或在 policy 中声明偏离，不静默缩减。
 - Linux 构建用 ubuntu-22.04（较旧 glibc，兼容面更广）；只有依赖要求时才升级。
 - 安装包是正式产物；portable 只是便利。updater 指向的必须是可被替换的安装产物。
+- **安装包界面语言**：安装和卸载向导统一英文，自定义页面、按钮与提示文案也使用英文。语言列表仅保留英文并关闭语言选择器，避免随系统或应用语言切换。Tauri 在 `bundle.windows.nsis` 设置 `"languages": ["English"]`、`"displayLanguageSelector": false`；electron-builder 在 `nsis` 设置 `"installerLanguages": ["en_US"]`、`"displayLanguageSelector": false`。已有自定义 NSIS 脚本或 hook 时，同步核对实际生效的语言及文案。发布验收在中文 Windows 上运行安装和卸载向导，确认均为英文。[Tauri 配置](https://v2.tauri.app/reference/config/#nsisconfig)、[electron-builder NSIS 配置](https://www.electron.build/docs/api/app-builder-lib.interface.nsisoptions/)
 - **技术栈产物边界**：本表规范针对 Tauri 与 Electron（自动更新生态如 `electron-updater`、`@tauri-apps/plugin-updater` 均深度绑定 NSIS 安装包）。若是 WPF / .NET 原生桌面应用，其安装包与分发矩阵按 `wpf-desktop` 的「三轨分发矩阵（1. 免 UAC Inno Setup 安装包 + 2. 自包含便携 Zip + 3. 框架依赖精简 Zip）」执行，不在此处混用。
 
 ## 工具链
@@ -36,7 +36,7 @@
   - `audit.mjs` 的 P 级只针对 CI 的 `node-version` / `node-version-file`；本地 `.nvmrc` 过期只作 Heads-up。
   - Node 只是构建工具，不是应用运行时（Electron 内置 Node，版本由 Electron major 决定）。
 - **npm**：默认包管理器。CI 用 `npm ci`（锁文件入库，按 `integrity` 校验），本地用 `npm i`。锁文件是唯一事实来源。
-  - Yarn / pnpm / bun 项目不强迁：脚本照样能读它们的锁文件。存量 Yarn 1 项目 CI 必须 `--frozen-lockfile`；真要迁 Yarn 4 时单独一个 PR。
+  - Yarn / pnpm / bun 项目不强迁：脚本照样能读它们的锁文件。存量 Yarn 1 项目 CI 必须 `--frozen-lockfile`；需要迁移包管理器时，独立验证安装、缓存和锁文件行为。
   - 新建和升级时直接更新已发布的兼容稳定版，阅读跨 major 的迁移说明，同步修改代码和锁文件并验证。
 - **Rust（Tauri）**：stable toolchain；Cargo.lock 入库；遵守目标 crate 的 MSRV。
 
@@ -50,10 +50,10 @@
 ## 版本与发布
 
 - **git tag `vX.Y.Z` 是唯一版本源**。发版提交先改 package.json（Tauri 的 `tauri.conf.json` `version` 指向 `"../package.json"`），再打 tag；release workflow 断言一致，不一致即失败。
-- 发布流：`validate`（tag⇄版本、测试）→ 单一草稿 → 矩阵构建上传 → `publish`（校验 feed/资产、LF SHA256SUMS、provenance attestation、protected environment 人工审批、`draft=false make_latest=true`、匿名检查 `releases/latest` 与 feed）。
-- release workflow 只在默认分支维护；tag 运行的是**被打 tag 的提交里的 workflow 文件**。手动重建已有 tag 时用该 tag 作为 dispatch ref，确保事件提交、验证提交和打包输入一致。
-- 测试门禁在同一文件内（`needs: validate`）；红树不发布。
-- 流水线稳定后开启 GitHub **immutable releases**：资产只能在草稿阶段上传，发布后 tag 与资产锁定，修复只能 forward-fix 新版本。
+- 发布流采用校验和测试 → 构建/打包 → 直接公开。Tauri 使用官方 Action，Electron/WPF 使用 softprops 的 draft: false；审批、草稿、provenance 与额外证据按项目明确要求添加。
+- 需要手动运行按钮时，将 workflow 放在默认分支；tag 运行的是**被打 tag 的提交里的 workflow 文件**，不要求源码只能来自默认分支。手动重建已有 tag 时选择该 tag ref，确保事件提交、验证提交和打包输入一致。
+- 发布必须依赖所发提交的测试结果；模板使用 `needs: validate`，已有 reusable workflow 或外部门禁需核对实际依赖。
+- immutable releases 按仓库已有配置及发布 Action 的实际支持适配。
 - 多个应用共用一个发布仓库（release hub）时，tag 加应用前缀（如 `appA-v1.2.3`），两边都从 tag 推导名称和版本。
 
 ## 签名
@@ -61,9 +61,9 @@
 | 层 | 默认 |
 |---|---|
 | Tauri updater 签名 | 必须；私钥只在 secrets；不随意轮换（旧客户端只信旧公钥） |
-| Windows | 公开分发后签名，首选 Azure Artifact Signing；未签名期间在 release 说明提示 SmartScreen |
+| Windows | 公开分发采用签名，首选 Azure Artifact Signing；未签名期间在 release 说明提示 SmartScreen |
 | macOS | Developer ID + 公证；没有 Apple 账号时 Tauri 用 ad-hoc（`signingIdentity: "-"`）并写明打开方式；Electron 未签名则 macOS 只能手动更新 |
-| Linux | 无系统签名；SHA256SUMS + attestation |
+| Linux | 无系统签名；SHA256SUMS；attestation 按需 |
 
 ## winget
 

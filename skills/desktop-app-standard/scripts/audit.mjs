@@ -2,11 +2,13 @@
 // Read-only fact collector for Tauri / Electron apps.
 // Never installs dependencies, runs project scripts, writes into the project, commits, tags or publishes.
 import fs from 'node:fs';
+import { deliveryFindings } from './delivery-checks.mjs';
 import path from 'node:path';
 import { TOOL_VERSION, exact, compare, stableMax, walk, read, cargoPackages, workflowHints, usageHints, requestJson, releaseHistory,
   LOCKFILES, parseYarnLock, parsePnpmLock, parseBunLock, resolveFromLock, electronSupportedMajors, nodeSupportFacts, classifyNotes,
   changelogSections, refVersion, WRITE_CAPABLE_ACTIONS, macTargetsFromBuilder, macTargetsFromArgs, parseJson5 } from './core.mjs';
-import { runTraps, defaultContext, stripComments } from './ci-traps.mjs';
+import { runTraps, defaultContext, stripComments, TRAPS, workflowCoverage } from './ci-traps.mjs';
+import { discoverApplications, workflowApplications } from './app-context.mjs';
 import { parseTfms, parseGlobalJson, normalizeMetadata, analyzeDotnet, metadataUrl, tfmInfo, sdkParts } from './dotnet.mjs';
 
 const USAGE = `Usage: node audit.mjs <project-dir> [--offline] [--ci-only] [--dotnet] [--json] [--pages 1..10] [--out <report.json>] [--since-baseline <review.json>]
@@ -98,9 +100,11 @@ if (rootPkg?.packageManager) report.packageManager = rootPkg.packageManager;
 // lockfile cannot resolve, it would mark the whole collection incomplete
 // (exit code 2) for a file nobody edits.
 const builderManifestTargets = new Map();
+const npmManifests = new Map();
 const isPackagedAppManifest = f => /(^|\/)resources\/app\/package\.json$/.test(f);
 for (const file of scan.files.filter(f => /(^|\/)package\.json$/.test(f) && !isPackagedAppManifest(f))) {
   const data = file === 'package.json' ? rootPkg : parseJson(file); if (!data) continue;
+  npmManifests.set(file, data);
   const macTarget = data.build?.mac?.target;
   if (macTarget) {
     const targets = [macTarget].flat().map(entry => typeof entry === 'string' ? entry : entry?.target).filter(Boolean);
@@ -154,32 +158,40 @@ const has = n => report.inventory.some(x => x.name === n || (n.endsWith('*') && 
 const isTauri = has('tauri') || has('@tauri-apps/cli') || scan.files.some(f => /tauri\.conf\.json5?$/.test(f));
 const hasElectron = has('electron');
 const usesTauriUpdater = has('tauri-plugin-updater') || has('@tauri-apps/plugin-updater');
-let tauriCreateUpdaterArtifacts = null, tauriBothWindowsBundles = false;
-// Tauri v2 accepts tauri.conf.json5 as well as .json. Only the .json spelling used to
-// be parsed, so a JSON5 project was detected as Tauri but its bundle settings were never
-// read: createUpdaterArtifacts stayed null and the P0 "updater manifest missing" check
-// failed open — the report said no P0 while every user's update was dead.
+const tauriConfigs = [];
 for (const file of scan.files.filter(f => /(^|\/)tauri\.conf\.json5?$/.test(f))) {
   const raw = text(file) ?? '';
   let conf = null;
   try { conf = JSON.parse(raw); } catch { conf = parseJson5(raw); }
   if (!conf) {
-    // The updater P0 cannot run without this file, and a warning alone would leave
-    // the report "complete" with no P0 — the exact fail-open this branch exists to stop.
     incomplete(`${file}: 配置读不出来（不是合法 JSON，也不是可读的 JSON5），createUpdaterArtifacts 与 targets 未核验`);
+    tauriConfigs.push({ file, unreadable: true });
     continue;
   }
-  const b = conf.bundle ?? {};
-  if (b.createUpdaterArtifacts !== undefined) tauriCreateUpdaterArtifacts = b.createUpdaterArtifacts === true || b.createUpdaterArtifacts === 'v1Compatible';
-  else if (tauriCreateUpdaterArtifacts === null) tauriCreateUpdaterArtifacts = false;
-  const targets = b.targets ?? 'all';
-  if (targets === 'all' || (Array.isArray(targets) && targets.includes('msi') && targets.includes('nsis'))) tauriBothWindowsBundles = true;
-  report.tauriConfig = { file, createUpdaterArtifacts: b.createUpdaterArtifacts ?? null, targets, identifier: conf.identifier ?? null };
+  tauriConfigs.push({ file, createUpdaterArtifacts: conf.bundle?.createUpdaterArtifacts ?? null,
+    targets: conf.bundle?.targets ?? 'all', identifier: conf.identifier ?? null });
 }
-// No config at all is the same fail-open the unreadable branch above exists to stop:
-// the updater P0 cannot run, so the run must not report itself as complete.
-if (isTauri && usesTauriUpdater && tauriCreateUpdaterArtifacts === null)
-  incomplete('使用了 Tauri updater，但没有找到 tauri.conf.json/json5；createUpdaterArtifacts 未核验');
+const applications = discoverApplications(tauriConfigs, report.inventory, [...npmManifests.keys()],
+  scan.files.filter(file => /(^|\/)Cargo\.toml$/.test(file)).map(file => ({file, text: text(file) ?? ''})));
+const multiApplication = applications.length > 1;
+const artifactsEnabled = config => config && !config.unreadable
+  ? config.createUpdaterArtifacts === true || config.createUpdaterArtifacts === 'v1Compatible' : null;
+const bothBundles = config => config?.targets === 'all' ||
+  (Array.isArray(config?.targets) && config.targets.includes('msi') && config.targets.includes('nsis'));
+// Preserve the existing single-config field. Multiple configs live in applications.
+if (tauriConfigs.length === 1 && !tauriConfigs[0].unreadable) report.tauriConfig = tauriConfigs[0];
+const tauriCreateUpdaterArtifacts = tauriConfigs.length === 1 ? artifactsEnabled(tauriConfigs[0]) : null;
+const tauriBothWindowsBundles = tauriConfigs.length === 1 && bothBundles(tauriConfigs[0]);
+report.applications = applications.map(app => ({ directory: app.directory,
+  frameworks: [app.isTauri && 'tauri', app.hasElectron && 'electron'].filter(Boolean),
+  manifests: [...new Set(app.inventory.map(item => item.manifest))], tauriConfigs: app.tauriConfigs }));
+if (!applications.length && isTauri && usesTauriUpdater) incomplete('使用了 Tauri updater，但没有找到 tauri.conf.json/json5；createUpdaterArtifacts 未核验');
+for (const app of applications) {
+  if (app.isTauri && app.usesTauriUpdater && !app.tauriConfigs.length)
+    incomplete(`${app.directory}: 使用了 Tauri updater，但没有找到 tauri.conf.json/json5；createUpdaterArtifacts 未核验`);
+  if (app.tauriConfigs.length > 1)
+    incomplete(`${app.directory}: 多个 Tauri 基础配置，无法确定实际生效文件；按应用子目录和实际配置核验`);
+}
 const electronMajor = (() => { const v = report.inventory.find(x => x.name === 'electron' && x.resolved)?.resolved; return v ? Number(v.split('.')[0]) : null; })();
 let platforms = ['windows', 'macos', 'linux'];
 const policyNotes = [], acceptedRules = new Map();
@@ -215,10 +227,58 @@ const actionsLock = scan.files.includes('.github/workflows/actions.lock');
 for (const file of workflowFiles) report.actions.push(...workflowHints(file, text(file) ?? '', actionsLock).actions);
 const ctx = defaultContext({ isTauri, hasElectron, hasElectronUpdater: has('electron-updater'), usesTauriUpdater, tauriCreateUpdaterArtifacts,
   tauriBothWindowsBundles, electronMajor, lockfiles: lockfileKinds, packageManager: report.packageManager ?? (yarnFlavor ? `yarn (${yarnFlavor})` : null), yarnFlavor, enginesNode, platforms });
-report.ciFindings.push(...runTraps(workflowFiles.map(file => ({ file, text: text(file) ?? '' })), ctx,
-  ({ file, id, error }) => incomplete(`${file}: 陷阱 ${id} 执行失败（${error?.message ?? error}）；该检查未完成`)));
+const trapError = ({ file, id, error }) => incomplete(`${file}: 陷阱 ${id} 执行失败（${error?.message ?? error}）；该检查未完成`);
+const applicationRuleIds = new Set(['tauri-updater-manifest', 'updater-json-prefer-nsis', 'electron-updater-manifest',
+  'electron-updater-windows-target', 'electron-runtime-download', 'electron-builder-empty-csc-link',
+  'electron-mac-multiarch-split', 'electron-publish-never', 'cache-lockfile-mismatch', 'npm-ci-without-lockfile',
+  'npm-install-not-ci', 'yarn-install-not-frozen', 'yarn-berry-corepack', 'node-version-vs-engines',
+  'rust-cache-workspace', 'tauri-linux-deps', 'tauri-macos-rust-targets']);
+const workflowScopes = multiApplication ? workflowFiles.flatMap(file => workflowApplications(file, text(file) ?? '', applications, scan.files)) : [];
+for (const file of workflowFiles) {
+  const scoped = multiApplication && workflowScopes.some(scope => scope.file === file);
+  report.ciFindings.push(...runTraps([{file, text: text(file) ?? ''}], ctx, trapError,
+    scoped ? TRAPS.filter(rule => !applicationRuleIds.has(rule.id)) : TRAPS));
+}
+if (multiApplication) {
+  report.workflowScopes = workflowScopes.map(({ text, ...scope }) => scope);
+  for (const scope of workflowScopes) {
+    if (scope.reason) { incomplete(`${scope.file}:${scope.line} (${scope.job}): ${scope.reason}，应用配置检查未完成；按应用子目录重跑并人工核对 workflow`); continue; }
+    const app = applications.find(app => app.directory === scope.application);
+    const localLock = governingLock(app.directory);
+    const localPkgFile = path.posix.join(app.directory, 'package.json');
+    const localPkg = scan.files.includes(localPkgFile) ? parseJson(localPkgFile) : null;
+    const config = app.tauriConfigs.length === 1 ? app.tauriConfigs[0] : null;
+    const context = defaultContext({ ...ctx, ...app, tauriCreateUpdaterArtifacts: artifactsEnabled(config),
+      tauriBothWindowsBundles: bothBundles(config),
+      electronMajor: Number(app.inventory.find(item => item.name === 'electron' && item.resolved)?.resolved?.split('.')[0]) || null,
+      lockfiles: localLock ? { [localLock.kind]: true } : {}, packageManager: localPkg?.packageManager ?? null,
+      yarnFlavor: localLock?.flavor ?? null, enginesNode: localPkg?.engines?.node ?? null });
+    const findings = runTraps([{ file: scope.file, text: scope.text }], context, trapError,
+      TRAPS.filter(rule => applicationRuleIds.has(rule.id)));
+    for (const finding of findings) {
+      if (!report.ciFindings.some(existing => existing.id === finding.id && existing.file === finding.file &&
+          existing.line === finding.line && existing.application === app.directory))
+        report.ciFindings.push({ ...finding, application: app.directory });
+    }
+  }
+}
 if (!workflowFiles.length) report.warnings.push('没有 .github/workflows；新项目可从 templates/ 生成 ci/release。');
+report.workflowCoverage = workflowCoverage(workflowFiles.map(file => ({file, text: text(file) ?? ''})));
+if (isTauri || hasElectron || dotnet) {
+  const coverage = report.workflowCoverage;
+  if (coverage.delegated.length) report.warnings.push('存在 reusable workflow 或发布脚本委托；追踪其实现、权限与发布路径后再确认覆盖范围。');
+  for (const [kind, evidence] of [['pull-request', coverage.pullRequest], ['release', coverage.release]]) {
+    if (evidence.length || coverage.delegated.length || (kind === 'release' && coverage.manual.length)) continue;
+    report.ciFindings.push({id: `workflow-${kind}-missing`, severity: 'P2', confidence: 'heuristic',
+      file: '.github/workflows', line: null,
+      detail: kind === 'release' ? '未发现 GitHub Release 构建或上传入口；需确认项目的实际分发渠道。' : '未发现 pull_request 检查入口。',
+      fix: kind === 'release' ? 'GitHub Releases 项目适配对应栈的发布模板；商店、内部或手动渠道记录现有交付方法和验收证据。' : '按现有构建与测试命令配置 PR 检查，并核对受保护分支的 required checks。'});
+  }
+}
 report.ciFindings.push(...policyNotes);
+report.ciFindings.push(...deliveryFindings(scan.files
+  .filter(file => /\.cs$|\.iss$|(?:release|publish)[^/]*\.(?:[cm]?js|ps1)$|(?:^|\/)package\.json$|electron-builder\.(?:json5?|ya?ml)$/.test(file))
+  .map(file => ({file, text: text(file) ?? ''}))));
 
 // ---------------- Node toolchain pins ----------------
 const nodePins = [], nodePinSeen = new Set();
@@ -253,42 +313,25 @@ report.nodePins = nodePins;
 // a .dmg and every "check for update" throws ERR_UPDATER_ZIP_FILE_NOT_FOUND.
 // Nothing else notices: the build is green, the manifest exists, the release
 // looks fine — and the app's update button is dead on every Mac.
-if (hasElectron && has('electron-updater')) {
-  let macTargets = null, macSrc = null, macLine = null;
-  // CLI arguments win over the config (electron-builder lets the command line
-  // override mac.target), so check the workflows first.
-  for (const wf of workflowFiles) {
-    // Comments are data, not commands (the same rule the CI traps follow): a comment
-    // mentioning `--mac dmg zip` must not mask a real dmg-only build.
-    const wfText = stripComments(text(wf) ?? '');
-    const args = macTargetsFromArgs(wfText);
-    if (args && args.length) {
-      macTargets = args;
-      macSrc = wf;
-      const at = /--mac\b/.exec(wfText);
-      macLine = at ? lineAt(wfText, at.index) : null;
-      break;
-    }
-  }
-  if (!macTargets) {
-    const builderFile = scan.files.find(f => /(^|\/)electron-builder\.ya?ml$/.test(f));
-    const builderText = builderFile ? stripComments(text(builderFile) ?? '') : '';
-    const cfgTargets = macTargetsFromBuilder(builderText);
-    if (cfgTargets) {
-      macTargets = cfgTargets;
-      macSrc = builderFile;
-      const at = /^\s*target:/m.exec(builderText);
-      macLine = at ? lineAt(builderText, at.index) : null;
-    }
-  }
-  if (!macTargets && builderManifestTargets.size === 1) {
-    [macSrc, macTargets] = builderManifestTargets.entries().next().value;
-  }
-  const hasZip = macTargets?.some(x => /^zip$/i.test(x));
-  const hasInstaller = macTargets?.some(x => /^(dmg|pkg)$/i.test(x));
-  if (macTargets && hasInstaller && !hasZip) {
-    report.ciFindings.push({ id: 'mac-update-needs-zip', severity: 'P1', confidence: 'heuristic', file: macSrc, line: macLine,
-      detail: `macOS 的打包目标是 ${macTargets.join('/')}，没有 zip。electron-updater 的 MacUpdater 只在更新清单里找 zip（findFile(files,"zip",["pkg","dmg"]) 里的 pkg/dmg 是**排除表**，不是兜底），所以清单会指向 .dmg，检查更新直接抛 ERR_UPDATER_ZIP_FILE_NOT_FOUND——Mac 上「检查更新」必失败。构建全绿、清单也在，只有用户点得到。`,
+for (const app of applications.filter(app => app.hasElectron && app.hasElectronUpdater)) {
+  const builderFile = scan.files.find(file => /(^|\/)electron-builder\.ya?ml$/.test(file) && (!multiApplication || dirOf(file) === app.directory));
+  const builderText = builderFile ? stripComments(text(builderFile) ?? '') : '';
+  const manifestTargets = [...builderManifestTargets].filter(([file]) => !multiApplication || dirOf(file) === app.directory);
+  const configTargets = macTargetsFromBuilder(builderText);
+  const fallback = configTargets ? { targets: configTargets, file: builderFile, line: lineAt(builderText, /^\s*target:/m.exec(builderText)?.index ?? 0) }
+    : manifestTargets.length === 1 ? { targets: manifestTargets[0][1], file: manifestTargets[0][0], line: null } : null;
+  const scopes = multiApplication ? workflowScopes.filter(scope => scope.application === app.directory)
+    : workflowFiles.map(file => ({file, text: stripComments(text(file) ?? '')}));
+  const overrides = scopes.map(scope => ({ targets: macTargetsFromArgs(scope.text), file: scope.file,
+    line: lineAt(scope.text, /--mac\b/.exec(scope.text)?.index ?? 0) }));
+  const checks = multiApplication ? (overrides.length ? overrides.map(override => override.targets?.length ? override : fallback) : [fallback])
+    : [overrides.find(override => override.targets?.length) ?? fallback];
+  for (const check of checks.filter(Boolean)) {
+    if (!check.targets.some(target => /^(dmg|pkg)$/i.test(target)) || check.targets.some(target => /^zip$/i.test(target))) continue;
+    if (report.ciFindings.some(finding => finding.id === 'mac-update-needs-zip' && finding.file === check.file && finding.line === check.line && finding.application === app.directory)) continue;
+    report.ciFindings.push({ id: 'mac-update-needs-zip', severity: 'P1', confidence: 'heuristic', file: check.file, line: check.line,
+      ...(multiApplication ? { application: app.directory } : {}),
+      detail: `macOS 的打包目标是 ${check.targets.join('/')}，没有 zip。electron-updater 的 MacUpdater 只在更新清单里找 zip（findFile(files,"zip",["pkg","dmg"]) 里的 pkg/dmg 是**排除表**，不是兜底），所以清单会指向 .dmg，检查更新直接抛 ERR_UPDATER_ZIP_FILE_NOT_FOUND——Mac 上「检查更新」必失败。构建全绿、清单也在，只有用户点得到。`,
       fix: 'mac 的 target 里加 zip（electron-builder.yml 的 mac.target，或工作流里的 `--mac dmg zip`），并在发布流水线里校验 latest-mac.yml 指向 .zip。' });
   }
 }
@@ -480,12 +523,19 @@ if (!offline && auditFrameworks) {
   for (const p of plugins) await collect(`plugin:${p}`, async () => {
     const rustName = `tauri-plugin-${p}`, jsName = `@tauri-apps/plugin-${p}`;
     const local = lowest(rustName) ?? lowest(jsName), target = targetOf(rustName) ?? targetOf(jsName);
-    const rust = report.inventory.filter(x => x.name === rustName), js = report.inventory.filter(x => x.name === jsName);
-    const pairOk = rust.length && js.length ? rust.every(r => js.every(j => r.resolved && r.resolved === j.resolved)) : null;
-    report.compatibility.push({ rule: 'official-plugin-exact-pair', plugin: p, status: pairOk === false ? 'mismatch' : pairOk ? 'ok' : 'one-side-only',
-      rust: rust.map(x => ({ version: x.resolved, file: x.manifest })), js: js.map(x => ({ version: x.resolved, file: x.manifest })), source: 'https://v2.tauri.app/develop/updating-dependencies' });
-    if (pairOk === false) report.frameworkFindings.push({ id: 'tauri-plugin-skew', severity: 'P0', confidence: 'confirmed', file: rust[0].manifest,
-      detail: `插件 ${p} 的 Rust(${rust.map(x => x.resolved).join('/')}) 与 JS(${js.map(x => x.resolved).join('/')}) 版本不一致；不会在构建时失败，而是运行时缺命令/行为错位。`, fix: '同一提交中把两侧升级到同一完整版本。' });
+    for (const app of multiApplication ? applications : [{directory: null, inventory: report.inventory}]) {
+      const rust = app.inventory.filter(x => x.name === rustName), js = app.inventory.filter(x => x.name === jsName);
+      if (!rust.length && !js.length) continue;
+      if (multiApplication && new Set(rust.map(item => item.resolved)).size > 1) {
+        incomplete(`${app.directory}: 插件 ${p} 的 Cargo 锁文件含多个版本，无法确认直接依赖；用 cargo metadata 核验`); continue;
+      }
+      const location = multiApplication ? {application: app.directory} : {};
+      const pairOk = rust.length && js.length ? rust.every(r => js.every(j => r.resolved && r.resolved === j.resolved)) : null;
+      report.compatibility.push({ ...location, rule: 'official-plugin-exact-pair', plugin: p, status: pairOk === false ? 'mismatch' : pairOk ? 'ok' : 'one-side-only',
+        rust: rust.map(x => ({ version: x.resolved, file: x.manifest })), js: js.map(x => ({ version: x.resolved, file: x.manifest })), source: 'https://v2.tauri.app/develop/updating-dependencies' });
+      if (pairOk === false) report.frameworkFindings.push({ ...location, id: 'tauri-plugin-skew', severity: 'P0', confidence: 'confirmed', file: rust[0].manifest,
+        detail: `插件 ${p} 的 Rust(${rust.map(x => x.resolved).join('/')}) 与 JS(${js.map(x => x.resolved).join('/')}) 版本不一致；不会在构建时失败，而是运行时缺命令/行为错位。`, fix: '同一提交中把两侧升级到同一完整版本。' });
+    }
     if (!local || !target || compare(local, target) >= 0) return;
     const url = `https://api.github.com/repos/tauri-apps/plugins-workspace/contents/plugins/${p}/CHANGELOG.md?ref=v2`;
     const md = await get(url, { raw: true, allow404: true });
@@ -505,14 +555,20 @@ if (!offline && auditFrameworks) {
   });
 }
 // Tauri API/core minor pairing (offline-safe).
-const tauriCore = report.inventory.filter(x => x.name === 'tauri' && x.ecosystem === 'cargo'), tauriApi = report.inventory.filter(x => x.name === '@tauri-apps/api');
-if (auditFrameworks && tauriCore.length && tauriApi.length) {
-  const mm = v => v?.split('.').slice(0, 2).join('.');
-  const ok = tauriCore.every(c => tauriApi.every(a => c.resolved && a.resolved && mm(c.resolved) === mm(a.resolved)));
-  report.compatibility.push({ rule: 'tauri-api-same-minor', status: ok ? 'ok' : 'review', rust: tauriCore.map(x => x.resolved), js: tauriApi.map(x => x.resolved), source: 'https://v2.tauri.app/develop/updating-dependencies',
-    note: 'CLI/build/macros 独立发版，不要求全部版本号相等。' });
-  if (!ok) report.frameworkFindings.push({ id: 'tauri-api-core-minor-skew', severity: 'P1', confidence: 'heuristic', file: tauriApi[0].manifest,
-    detail: `@tauri-apps/api(${tauriApi.map(x => x.resolved).join('/')}) 与 tauri(${tauriCore.map(x => x.resolved).join('/')}) 的 major.minor 不一致（monorepo 请逐应用配对）。`, fix: '把二者调整到同一 major.minor。' });
+for (const app of multiApplication ? applications : [{directory: null, inventory: report.inventory}]) {
+  const tauriCore = app.inventory.filter(x => x.name === 'tauri' && x.ecosystem === 'cargo'), tauriApi = app.inventory.filter(x => x.name === '@tauri-apps/api');
+  if (auditFrameworks && tauriCore.length && tauriApi.length) {
+    if (multiApplication && new Set(tauriCore.map(item => item.resolved)).size > 1) {
+      incomplete(`${app.directory}: Tauri core 的 Cargo 锁文件含多个版本，无法确认直接依赖；用 cargo metadata 核验`); continue;
+    }
+    const location = multiApplication ? {application: app.directory} : {};
+    const mm = v => v?.split('.').slice(0, 2).join('.');
+    const ok = tauriCore.every(c => tauriApi.every(a => c.resolved && a.resolved && mm(c.resolved) === mm(a.resolved)));
+    report.compatibility.push({ ...location, rule: 'tauri-api-same-minor', status: ok ? 'ok' : 'review', rust: tauriCore.map(x => x.resolved), js: tauriApi.map(x => x.resolved), source: 'https://v2.tauri.app/develop/updating-dependencies',
+      note: 'CLI/build/macros 独立发版，不要求全部版本号相等。' });
+    if (!ok) report.frameworkFindings.push({ ...location, id: 'tauri-api-core-minor-skew', severity: 'P1', confidence: 'heuristic', file: tauriApi[0].manifest,
+      detail: `@tauri-apps/api(${tauriApi.map(x => x.resolved).join('/')}) 与 tauri(${tauriCore.map(x => x.resolved).join('/')}) 的 major.minor 不一致（monorepo 请逐应用配对）。`, fix: '把二者调整到同一 major.minor。' });
+  }
 }
 // Action pins: latest release and major gap. House style pins major tags, so suggestedPin is `@v<latest major>`.
 if (!offline) for (const repository of [...new Set(report.actions.map(a => a.repository))]) await collect(`action:${repository}`, async () => {
@@ -639,7 +695,8 @@ else {
     L.push('', '## .NET 发现（P0/P1/P2 / notice）', ...(dn.length ? dn.map(f => `- [${f.severity}] ${f.id} · ${f.file ?? '?'}: ${f.detail} → ${f.fix}`) : ['- 未发现']));
   }
   L.push('', '## CI & Release（与框架风险分开处理）');
-  const where = f => `${f.file}${f.line ? ':' + f.line : ''}`;
+  for (const [kind, files] of Object.entries(report.workflowCoverage)) L.push(`- ${kind}: ${files.join(', ') || '未发现静态证据'}`);
+  const where = f => `${f.file}${f.line ? ':' + f.line : ''}${f.application ? ` [${f.application}]` : ''}`;
   for (const sev of ['P0', 'P1', 'P2']) { const list = report.ciFindings.filter(f => f.severity === sev && !f.accepted); if (!list.length) continue;
     L.push(`### ${sev}`); for (const f of list) L.push(`- ${where(f)} ${f.id}: ${f.detail} → ${f.fix}`); }
   if (!report.ciFindings.some(f => f.severity !== 'notice' && !f.accepted)) L.push('- 未发现 P0/P1/P2 候选（启发式，不等于发布链已验证）');

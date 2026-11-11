@@ -1,47 +1,15 @@
 # 报告与审阅基线
 
-## 输出模板
+## 按任务交付
 
-```text
-任务模式 / 已完成的升级或只读巡检结论 / 剩余阻碍
-核验时间（UTC）、项目路径或 commit、模式、扫描/网络限制
+先写结论、实际改动和阻碍，再给出支撑结论的证据。按检查范围选择内容，无需每次生成完整报告：
 
-1. 版本矩阵
-组件 | 原解析版 → 实际解析版与位置 | 上游稳定版 | 技能目标 major / 该线稳定版与来源 | 是否对齐 / 阻碍和复查条件
-Node 工具链 | CI node-version / node-version-file（.nvmrc 仅提示） | Active/Maintenance/EOL | latest LTS（官方 schedule） | 发现
+- **依赖升级**：原解析版 → 实际解析版、目标与来源、锁文件/还原结果及兼容验证。SDK、TFM 和运行时分开说明。
+- **风险发现**：影响、依据位置、confirmed/heuristic/unknown、处理及验证。框架风险与 CI/Release 发现分开；`notice` 和已接受偏离不计入 P0/P1/P2。
+- **CI 与发布**：所测提交、实际执行的 job、产物和更新链路，区分本机、托管 runner 与设备验收。
+- **性能**：同一环境下的前后测量；无数据时写待测。
 
-1b. .NET 运行时与 SDK（--dotnet）
-项目 | TFM | global.json pin/rollForward | 支持阶段/EOL | latest SDK/runtime | 发现
-（TFM/EOL 来自官方 release metadata；global.json 语义按官方文档；不执行 dotnet/MSBuild）
-
-2. 框架 P0 / P1（版本、支持窗口、配对、上游 breaking/security）
-风险 | confirmed/heuristic/unknown | 文件:行 | 官方来源 | 影响 | 处理与验证
-（无证据时写未确认，不把静态候选直接判漏洞；`.desktop-policy.json` 的偏离也可接受 framework finding id，已接受的单列，不计入 P0/P1/P2）
-
-2b. 上游变更候选：classifyNotes 的 suggestedPriority 只是候选，读原文后再定级
-
-3. 新特性采用建议
-特性 | 解决的应用问题 | 平台/版本门槛 | 预期收益 | 风险成本 | 采用/暂缓/不适用
-
-4. House style 差距
-当前做法 | 项目约束或偏离 | 本次修改（只读巡检填写建议动作）
-
-5. CI & Release（独立分区，单独 P0/P1/P2，不与框架风险混排）
-ciFindings（references/ci-traps.md）| Action 大版本与 suggestedPin | 平台覆盖 | 草稿/签名/发布/feed
-（`notice` 与 `.desktop-policy.json` 已接受的偏离单列，不计入 P0/P1/P2；已接受的要写出 reason 与 revisitWhen）
-
-6. 优化
-测量条件、前/后指标与原始记录；无数据=待测
-
-7. 实施和验证
-已读 / 已修改 / 已执行命令及结果 / 未验证环境 / 未执行的外部动作
-
-8. 升级顺序、回滚/forward-fix、暂缓事项、下一次复查触发条件
-```
-
-简短请求可精简；P0、采集失败、未验证平台和授权边界不可省略。
-
-新建或升级时附上锁文件或还原结果、实际运行的验证及受环境限制的检查。只读任务写明采集范围即可。
+保留影响结论的采集失败、未验证范围和具体复查条件。只读任务交付发现与建议，实施任务说明做了什么、如何验证。
 
 ## 事实与推断
 
@@ -58,14 +26,24 @@ ciFindings（references/ci-traps.md）| Action 大版本与 suggestedPin | 平�
 
 ## 基线策略
 
-使用 `.desktop-app-standard-review-YYYYMMDD.json` 作为新基线文件；先审阅 audit JSON，再显式 `--confirm-reviewed`。脚本拒绝离线/采集失败/截断的报告和覆盖现有文件；不同项目路径不能复用。
+报告的 `applications` 列出应用目录及配置来源，`workflowScopes` 给出 workflow、job、步骤、构建目录、应用归属和未核验原因。应用相关发现带可选 `application` 字段；schemaVersion 3 保留单应用的 `tauriConfig`，兼容 schema 2/3 审阅基线。
+
+路径关联采用 block-style workflow 的静态线索。表达式、目录／配置覆盖和 reusable workflow 需要人工核对；此时 `collectionComplete` 为 false。上游版本及 release 采集仍按组件汇总，逐应用配置和配对证据用于判断具体应用。
+
+原始报告、审计总结和基线均写进项目的 Git 忽略目录，例如 `desktop/release/audit-reports/YYYYMMDD/`；没有现成目录时建专用目录并加入 `.gitignore`，不堆在仓库根目录、不提交。已有未提交报告未经用户要求不批量删除；要整理时移入忽略目录。
+
+基线可选，用于下次减少重复阅读 release；不需要跨次比较时只输出终端结果即可，不必每次产生文件。需要保留时，在同一忽略目录内使用 `.desktop-app-standard-review-YYYYMMDD.json` 作为新基线文件；先审阅 audit JSON，再显式 `--confirm-reviewed`。后续 `--since-baseline` 传入该文件的实际路径。脚本拒绝离线/采集失败/截断的报告和覆盖现有文件；不同项目路径不能复用。
 
 基线储存已审阅 release ID，不储存“已修复”。`--since-baseline` 只标注 reviewed=true/false；仍计算当前依赖、上游、CI 和兼容性。不要只输出未读 release 而隐藏长期未处理风险。
 
-在项目 decision log/issue 另记：风险 ID、决定、原因、负责人、复查条件、已安装版本、已验证平台、已发布版本。旧版（`desktop-version-watch`）`.desktop-version-watch.json` 的“见过的最高版本”语义不可自动迁移为新版“已审阅”。
+需要长期追踪的取舍写入已有 policy、issue 或决策记录，保留原因和复查条件，无需另建台账。旧版 `.desktop-version-watch.json` 的“见过的最高版本”不能自动迁移为“已审阅”。
 
 ## 定期运行
 
-建议每周只读检查、每月集中做功能采用决策；已确认高危安全公告和 EOL 提前触发。频率与载体由用户决定，本技能不安装调度任务。本仓不用 Dependabot——升级多半要连带改代码并做一次真实更新验证，自动开 PR 反而添乱。
+频率和载体由用户或项目决定；安全公告和 EOL 可触发提前复查。沿用已有依赖管理工具，不因采用本技能另设调度或替换 Dependabot。
 
 如用户要 CI 自动报告：先确认目标仓库、权限与报告载体，用最小只读权限采集并保留失败状态，不自动改锁文件/合并 PR/发布。脚本退出 2 是不完整而非成功，应让维护者看到而非 `|| true` 静默吞掉。
+
+## 多项目回查
+
+仅在任务涉及多个应用时，按各应用的分发渠道、PR/tag 入口、产物和待验证项汇总。先验证共用模板的改法，再回查受影响项目；复用已有报告和证据，不重复抄写执行记录。

@@ -5,11 +5,158 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { parseSkillMetadata, getSkillVersion } from '../../../scripts/skill-metadata.mjs';
 const base = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 function temp() { return fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-app-standard-test-')); }
 function write(root, file, data) { fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true }); fs.writeFileSync(path.join(root, file), typeof data === 'string' ? data : JSON.stringify(data)); }
 const run = (script, args, options = {}) => spawnSync(process.execPath, [path.join(base, 'scripts', script), ...args], { encoding: 'utf8', ...options });
+
+test('CLI reports WPF update caching and release source regressions alongside CI', () => {
+  const root = temp();
+  try {
+    write(root, 'src/App.csproj', '<Project><PropertyGroup><TargetFramework>net10.0-windows</TargetFramework></PropertyGroup></Project>');
+    write(root, 'src/UpdateService.cs', 'Path.Combine(UpdatesRoot, version)');
+    write(root, 'scripts/release-assets.mjs', 'function verifyAssets() { return Object.keys(manifests); }\nassets.filter(a => a.digest && a.digest.startsWith("sha256:"));');
+    write(root, 'tools/installer/App.iss', '[Languages]\nName: "zh"; MessagesFile: "Chinese.isl"\n');
+    const result = run('audit.mjs', [root, '--dotnet', '--offline', '--json']);
+    assert.equal(result.status, 2, result.stderr);
+    const report = JSON.parse(result.stdout);
+    for (const id of ['update-cache-architecture', 'release-manifest-inventory', 'release-digest-skipped', 'installer-ui-language']) {
+      assert.ok(report.ciFindings.some(finding => finding.id === id), `missing ${id}`);
+    }
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});
+
+test('multiple Tauri apps keep updater settings, workflow steps and findings separate', () => {
+  const root = temp();
+  assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+  try {
+    write(root, 'package.json', {});
+    for (const directory of ['apps/a', 'apps/z']) {
+      write(root, `${directory}/package.json`, {dependencies: {'@tauri-apps/plugin-updater': '2.0.0'}});
+      write(root, `${directory}/package-lock.json`, {packages: {'node_modules/@tauri-apps/plugin-updater': {version: '2.0.0'}}});
+    }
+    const workflow = ['name: release', 'on: push', 'jobs:', '  build:', '    runs-on: windows-latest', '    steps:',
+      '      - uses: tauri-apps/tauri-action@v1', '        with:', '          projectPath: apps/a',
+      '      - uses: tauri-apps/tauri-action@v1', '        with:', '          projectPath: apps/z', ''].join('\n');
+    write(root, '.github/workflows/release.yml', workflow);
+    for (const broken of ['apps/a', 'apps/z']) {
+      for (const directory of ['apps/a', 'apps/z']) write(root, `${directory}/src-tauri/tauri.conf.json`, {
+        identifier: directory, bundle: {createUpdaterArtifacts: directory !== broken, targets: ['nsis']},
+      });
+      const result = run('audit.mjs', [root, '--offline', '--json']);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.schemaVersion, 3);
+      assert.equal(report.tauriConfig, undefined);
+      assert.equal(report.applications.length, 2);
+      const findings = report.ciFindings.filter(finding => finding.id === 'tauri-updater-manifest');
+      assert.deepEqual(findings.map(finding => finding.application), [broken]);
+      const expectedLine = broken === 'apps/a' ? 7 : 10;
+      assert.equal(findings[0].line, expectedLine);
+      assert.deepEqual(report.workflowScopes.map(scope => scope.application), ['apps/a', 'apps/z']);
+      const text = run('audit.mjs', [root, '--offline']).stdout;
+      assert.ok(text.includes(`[${broken}]`));
+    }
+    const runWorkflow = ['name: release', 'on: push', 'jobs:', '  build:', '    steps:',
+      '      - run: cargo tauri build', '        working-directory: apps/a',
+      '      - run: cargo tauri build', '        working-directory: apps/z', ''].join('\n');
+    write(root, '.github/workflows/release.yml', runWorkflow);
+    assert.equal(run('audit.mjs', [root, '--ci-only', '--json']).status, 0);
+    write(root, '.github/workflows/release.yml', runWorkflow.replace('working-directory: apps/a', 'working-directory: ${{ matrix.app }}'));
+    const unknown = run('audit.mjs', [root, '--ci-only', '--json']);
+    assert.equal(unknown.status, 2);
+    const report = JSON.parse(unknown.stdout);
+    assert.equal(report.collectionComplete, false);
+    assert.equal(report.workflowScopes[0].application, null);
+    assert.match(report.warnings.join('\n'), /应用配置检查未完成/);
+    assert.equal(report.workflowScopes[1].application, 'apps/z');
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});
+
+test('a sibling updater and a shared Cargo lock do not enable updates in every app', () => {
+  const root = temp();
+  assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+  try {
+    write(root, 'package.json', {});
+    write(root, 'Cargo.lock', '[[package]]\nname = "tauri-plugin-updater"\nversion = "2.0.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n');
+    for (const directory of ['a', 'z']) {
+      write(root, `${directory}/package.json`, {});
+      write(root, `${directory}/src-tauri/tauri.conf.json`, {bundle: {createUpdaterArtifacts: false}});
+      write(root, `${directory}/src-tauri/Cargo.toml`, `[dependencies]\ntauri = "2"\n${directory === 'a' ? 'tauri-plugin-updater.workspace = true\n' : ''}`);
+    }
+    write(root, '.github/workflows/release.yml', ['on: push', 'jobs:', '  build:', '    steps:',
+      '      - uses: tauri-apps/tauri-action@v1', '        with:', '          projectPath: a',
+      '      - uses: tauri-apps/tauri-action@v1', '        with:', '          projectPath: z', ''].join('\n'));
+    const report = JSON.parse(run('audit.mjs', [root, '--offline', '--json']).stdout);
+    const findings = report.ciFindings.filter(finding => finding.id === 'tauri-updater-manifest');
+    assert.deepEqual(findings.map(finding => finding.application), ['a']);
+    write(root, 'z/src-tauri/Cargo.toml', '[dependencies]\ntauri = "2"\ntauri-plugin-updater.workspace = true\n');
+    fs.unlinkSync(path.join(root, 'z/src-tauri/tauri.conf.json'));
+    const missing = JSON.parse(run('audit.mjs', [root, '--offline', '--json']).stdout);
+    assert.ok(missing.warnings.some(warning => warning.startsWith('z:') && warning.includes('没有找到 tauri.conf')));
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});
+
+test('a shared frontend manifest supports two Tauri shells without config overwrites', () => {
+  const root = temp();
+  assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+  try {
+    write(root, 'package.json', {dependencies: {'@tauri-apps/plugin-updater': '2.0.0'}});
+    write(root, 'package-lock.json', {packages: {'node_modules/@tauri-apps/plugin-updater': {version: '2.0.0'}}});
+    for (const directory of ['a', 'z']) write(root, `${directory}/src-tauri/tauri.conf.json`, {bundle: {createUpdaterArtifacts: directory === 'z'}});
+    write(root, '.github/workflows/release.yml', ['on: push', 'jobs:', '  build:', '    steps:',
+      '      - uses: tauri-apps/tauri-action@v1', '        with:', '          projectPath: a',
+      '      - uses: tauri-apps/tauri-action@v1', '        with:', '          projectPath: z', ''].join('\n'));
+    const report = JSON.parse(run('audit.mjs', [root, '--offline', '--json']).stdout);
+    assert.equal(report.applications.length, 2);
+    assert.deepEqual(report.ciFindings.filter(finding => finding.id === 'tauri-updater-manifest').map(finding => finding.application), ['a']);
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});
+
+test('Tauri core and JS API pairing stays within each application', () => {
+  const root = temp();
+  assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+  try {
+    write(root, 'package.json', {});
+    for (const [directory, version] of [['a', '2.1.0'], ['z', '2.5.0']]) {
+      write(root, `${directory}/package.json`, {dependencies: {'@tauri-apps/api': version}});
+      write(root, `${directory}/package-lock.json`, {packages: {'node_modules/@tauri-apps/api': {version}}});
+      write(root, `${directory}/src-tauri/tauri.conf.json`, {});
+      write(root, `${directory}/src-tauri/Cargo.lock`, `[[package]]\nname = "tauri"\nversion = "${version}"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n`);
+    }
+    const report = JSON.parse(run('audit.mjs', [root, '--offline', '--json']).stdout);
+    assert.equal(report.frameworkFindings.some(finding => finding.id === 'tauri-api-core-minor-skew'), false);
+    assert.deepEqual(report.compatibility.filter(pair => pair.rule === 'tauri-api-same-minor').map(pair => [pair.application, pair.status]), [['a', 'ok'], ['z', 'ok']]);
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});
+
+test('Electron mac targets and run defaults belong to their own application', () => {
+  const root = temp();
+  assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+  try {
+    write(root, 'package.json', {});
+    for (const directory of ['apps/a', 'apps/z']) {
+      write(root, `${directory}/package.json`, {dependencies: {'electron-updater': '6.0.0'}, devDependencies: {electron: '45.0.0'}});
+      write(root, `${directory}/package-lock.json`, {packages: {
+        'node_modules/electron-updater': {version: '6.0.0'}, 'node_modules/electron': {version: '45.0.0'},
+      }});
+      write(root, `${directory}/electron-builder.yml`, `mac:\n  target: [dmg${directory === 'apps/z' ? ', zip' : ''}]\n`);
+    }
+    const workflow = ['name: release', 'on: push', 'jobs:', '  a:', '    defaults:', '      run:',
+      '        working-directory: apps/a', '    steps:', '      - run: npx electron-builder --mac dmg --publish never',
+      '  z:', '    steps:', '      - run: npx electron-builder --mac dmg zip --publish never',
+      '        working-directory: apps/z', ''].join('\n');
+    write(root, '.github/workflows/release.yml', workflow);
+    let report = JSON.parse(run('audit.mjs', [root, '--offline', '--json']).stdout);
+    assert.deepEqual(report.workflowScopes.map(scope => scope.application), ['apps/a', 'apps/z']);
+    let findings = report.ciFindings.filter(finding => finding.id === 'mac-update-needs-zip');
+    assert.deepEqual(findings.map(finding => finding.application), ['apps/a']);
+    assert.equal(findings[0].line, 9);
+    fs.unlinkSync(path.join(root, '.github/workflows/release.yml'));
+    report = JSON.parse(run('audit.mjs', [root, '--offline', '--json']).stdout);
+    findings = report.ciFindings.filter(finding => finding.id === 'mac-update-needs-zip');
+    assert.deepEqual(findings.map(finding => finding.file), ['apps/a/electron-builder.yml']);
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});
 
 test('offline npm lock is resolved; script does not run project lifecycle scripts', () => {
   const root = temp();
@@ -317,8 +464,6 @@ test('online end-to-end with synthetic registry/release responses; since-baselin
     assert.ok(String(moving[0].detail).includes('softprops/action-gh-release'));
     // 只读 Action 的大版本标签不该触发“SHA 未在 tag 中找到”的警告（0.5.0 的回归）
     assert.equal(data.warnings.some(w => /SHA/.test(w)), false, data.warnings.join('\n'));
-    const skillVersion = getSkillVersion(parseSkillMetadata(fs.readFileSync(path.join(base, 'SKILL.md'), 'utf8')));
-    assert.equal(data.toolVersion, skillVersion);
     const review = path.join(root, 'review.json'); assert.equal(run('review-baseline.mjs', [audit, review, '--confirm-reviewed']).status, 0);
     r = spawnSync(process.execPath, ['--import', pathToFileURL(mock).href, path.join(base, 'scripts/audit.mjs'), root, '--json', '--since-baseline', review], { encoding: 'utf8' });
     assert.equal(r.status, 0, r.stderr); data = JSON.parse(r.stdout);
@@ -602,5 +747,24 @@ test('a failed checksum run emits no partial manifest', () => {
     const r = run('checksums.mjs', [path.join(root, 'a.zip'), path.join(root, 'z.zip')]);
     assert.notEqual(r.status, 0);
     assert.equal(r.stdout, '');
+    write(root, 'SHA256SUMS', 'old checksum');
+    const self = run('checksums.mjs', [path.join(root, 'a.zip'), path.join(root, 'SHA256SUMS')]);
+    assert.notEqual(self.status, 0);
+    assert.equal(self.stdout, '');
+    assert.match(self.stderr, /不能包含自身/);
   } finally { fs.rmSync(root, { recursive: true }); }
+});
+
+test('PR-only repositories report the absent release path without claiming offline verification', () => {
+  const root = temp();
+  try {
+    write(root, 'package.json', {name: 'coverage', version: '1.0.0', devDependencies: {electron: '45.0.0'}});
+    write(root, '.github/workflows/ci.yml', 'on: [pull_request]\njobs:\n  test:\n    steps:\n      - run: npm test\n');
+    const result = run('audit.mjs', [root, '--ci-only', '--offline', '--json']);
+    const report = JSON.parse(result.stdout);
+    assert.equal(result.status, 2);
+    assert.deepEqual(report.workflowCoverage.pullRequest, ['.github/workflows/ci.yml']);
+    assert.ok(report.ciFindings.some(f => f.id === 'workflow-release-missing'));
+    assert.ok(!report.ciFindings.some(f => f.id === 'workflow-pull-request-missing'));
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
 });

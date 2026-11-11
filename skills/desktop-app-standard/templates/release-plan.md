@@ -1,36 +1,20 @@
-# Release workflow 生成与验收约定
+# Release workflow 适配与验收
 
-这不是可直接部署的 YAML。基于实际项目与本次核验的官方 Action 参数生成 workflow，避免把过期 runtime/inputs 永久固化在模板中。
+默认直接公开。先确认应用、包管理器、锁文件、工作目录、版本源、平台/架构、构建测试命令和签名配置，再选择对应栈模板。
 
-## 输入
+| 栈 | 推荐流程 |
+| --- | --- |
+| Tauri | 校验测试 → 官方 tauri-action 矩阵直接发布 → 检查 updater 平台覆盖与摘要。 |
+| Electron | 校验测试 → 平台构建 artifacts → 单一 job 检查本地清单/摘要并直接 Release。 |
+| WPF | Windows 测试 → 发布 profile、签名、安装器、ZIP 解包 smoke → 直接 Release。 |
 
-- 可信 repository、default branch、release commit/tag、版本源与 app-specific tag 规则。
-- framework、包管理器与锁文件、工作目录、Node/Rust/toolchain。
-- OS/架构矩阵、最低 OS、runner、打包 target、构建/测试/打包命令。
-- signing/notarization/更新签名是否就绪（只记录 secret 名称，不记录值）。
-- release provider、stable/beta feed、是否 immutable release、是否 winget/商店。
+1. 按实际路径和脚本适配缓存、安装、构建和资产 glob。PR 只读，可信 tag job 才注入写令牌与签名凭据。
+2. 检查 tag 与版本一致，测试和发布使用同一源码提交。required checks 包含应用承诺的测试。
+3. 采用 draft: false / releaseDraft: false。人工审批、草稿、attestation、SBOM、构建证据仅在项目明确需要时配置。
+4. 保留 updater 对应的所有载体、签名和元数据；Electron 检查最终资产名与清单 URL/SHA-512，Tauri 使用官方 Action 生成清单。
+5. 发布说明列出实际平台、下载选择、签名状态与校验入口。稳定版与预发布的 channel 分别测试。
+6. 验证重跑、缺文件、错误哈希及测试失败；随后按授权验证公开下载和 N→N+1 更新。记录实际执行和缺少的 runner/设备。
 
-## Jobs 与权限
+多应用 release hub、immutable releases 和原生模块交叉架构按项目真实约束适配。已有可用的 workflow 可以沿用。
 
-1. validate 使用只读权限，核对 tag、应用版本和实际检出的提交。用锁文件安装，检查技能目标 major，在该提交执行测试。
-2. build 从 validate 取得提交 SHA，矩阵检出该提交逐平台构建。对可信 release 源注入最小签名凭证，打包后验签；不同架构产物唯一命名。
-3. aggregate：needs 全部成功的 build；下载和检查资产，合并 updater 平台/架构元数据，计算最终散列。
-4. stage：仅此处所需 contents:write；创建/更新同一草稿、上传全部资产；需要时生成 provenance/SBOM。
-5. publish 在草稿核验通过后按仓库并发组排队，再核对 tag 指向。稳定新版取得 latest，已有更高稳定版时将旧 tag 公开为历史 release。
-6. post-release：只读验证 tag、feed、匿名资产可下载、hash/签名、N→N+1 客户端。若测试需公开影响/付费资源先获授权。
-
-## 栈差异
-
-- Tauri：Windows NSIS（`updaterJsonPreferNsis: true`），macOS dmg + 更新载体 `.app.tar.gz` (.sig)，Linux AppImage + deb + rpm。核验 tauri-action 的 projectPath/args/releaseDraft/更新 manifest 生成选项，更新签名环境变量、所有平台 `.sig` 与 payload；不要让一个矩阵 job 的 latest.json 覆盖另一个。
-- Electron-builder：Windows NSIS，macOS dmg + zip（MacUpdater 必须），Linux AppImage + deb + rpm。打包器 publish 与独立发布器只选明确的责任边界；常见做法先 `--publish never` 再统一上传。核验 provider 生成的 yml、blockmap、各平台 target；Forge 项目使用对应发布链，不照搬 builder 参数。
-- WPF / .NET 原生桌面：Windows 推荐「三轨分发矩阵」（1. 免 UAC Inno Setup 6 / NSIS 安装包 + 2. 自包含便携 Zip + 3. 框架依赖精简 Zip），按 `wpf-desktop` 的 `project-setup.md` 与 `github-actions.md` 执行。
-- 生成工作流时先核对 Action 的稳定 release 与 runner 要求。新项目默认大版本标签，已有项目沿用其 pin 策略。
-
-## 生成后必须检查
-
-- YAML/actionlint 与 GitHub 平台校验；本地 lint 不等于 GitHub 真跑成功。
-- PR 无私钥/token；trusted commit 在构建和发布间不变；所有必需平台成功才公开。
-- draft 是预期阶段；已发布不可变资产不追加/覆盖；rerun 不误重复 publish。
-- manifests 引用最终签名文件且各平台齐全；校验旧 updater 读取兼容性。
-- stable/beta 分离；用户数据/签名身份/更新公钥无意外变化。
-- 哪些命令实测，哪些依赖环境、签名凭证和批准而未执行，逐项说明。
+涉及包型、更新缓存、资产 readiness 或 winget 时，按[发布流程](../references/release-flow.md)选择对应检查。交付引用实际入口和验证结果，复用已有项目记录。

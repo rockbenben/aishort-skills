@@ -36,11 +36,11 @@ Tauri updater 的更新签名不能关闭；更新公钥、私钥与 OS 代码�
 - 6 个目标：`x86_64/aarch64-pc-windows-msvc`、`aarch64/x86_64-apple-darwin`、`x86_64/aarch64-unknown-linux-gnu`。macOS 交叉架构要在 rust-toolchain 安装对应 target；Windows ARM64 可在 x64 runner 交叉编译（NSIS），首次需实测。
 - Linux 依赖按官方 prerequisites：`libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev`；AppImage 另需 `patchelf`，打开外链等场景按需 `xdg-utils`。缺包时编译失败或 AppImage 打包失败。
 - rust-cache `workspaces: './src-tauri -> target'`，不要把整个源码树当缓存。
-- tauri-action 用 `releaseId` 写入预建的唯一草稿；`updaterJsonPreferNsis: true`；不设 `tauriScript`（按锁文件自动选 `npm run tauri`/`npm exec tauri`，npm 的 `--` 由 action 自己补）。
+- tauri-action 按 tag 创建或复用唯一 Release，默认 `releaseDraft: false`；`updaterJsonPreferNsis: true`；不设 `tauriScript`（按锁文件自动选 `npm run tauri`/`npm exec tauri`，npm 的 `--` 由 action 自己补）。串行合并共享的 latest.json，全部平台完成后校验覆盖。
 - updater endpoint 指向 `releases/latest/download/latest.json`；publish 后按平台 key 全量校验。
 
 ## 插件变更
 
 `audit.mjs` 在线模式读取 `tauri-apps/plugins-workspace` 分支 `v2` 的 `plugins/<name>/CHANGELOG.md`，截取 `(已解析版, 最新版]` 的段落并分类（breaking / security / feature）。Rust crate 与 JS 包版本不一致是 P0（运行时才失败，通常表现为缺命令）。
 
-官方 GitHub pipeline 可作为参数来源，不作为永不过期模板；它的 releaseDraft=true 是正常草稿阶段。[Tauri GitHub Actions 指南](https://v2.tauri.app/distribute/pipelines/github)
+官方 GitHub pipeline 用于核对参数；其中的草稿示例按当前直接发布要求适配。[Tauri GitHub Actions 指南](https://v2.tauri.app/distribute/pipelines/github)
