@@ -10,12 +10,11 @@ var os = require("node:os");
 function createPublishHelpers(skillDir, console = globalThis.console) {
   var SERVER_DIR = path.join(skillDir, "docsify-server");
   var JUNK = ["Thumbs.db", "desktop.ini"];
-  var _serverHash = null;
   var DOC_EXTS = [".md", ".markdown", ".txt"];
   var YAML_KEY_LINE = /^[ \t]*(?:["'][^"']+["']|[A-Za-z_][\w.-]*)[ \t]*:(?:[ \t]|$)/;
   function versionIndexHtml(html, version) {
     return html.replace(/(href|src)="(assets\/[^"?]+)"/g, function (_m, attr, asset) {
-      return attr + '="' + asset + "?v=" + version + '"';
+      return attr + '="assets/' + version + '/' + asset.slice(7) + '"';
     });
   }
 
@@ -43,15 +42,31 @@ function createPublishHelpers(skillDir, console = globalThis.console) {
     return out;
   }
 
-  function serverDirHash() {
-    if (_serverHash) return _serverHash;
-    var hash = crypto.createHash("sha256");
-    listServerFiles().forEach(function (f) {
-      hash.update(f.key);
-      hash.update(fs.readFileSync(f.full));
+  function createViewerDeployment() {
+    // Read once: every uploaded byte and the index use the same snapshot even if
+    // another process upgrades the installed Skill while setup is in progress.
+    var files = listServerFiles().map(function (f) {
+      return { key: f.key, payload: fs.readFileSync(f.full) };
     });
-    _serverHash = hash.digest("hex").slice(0, 12);
-    return _serverHash;
+    var hash = crypto.createHash("sha256");
+    files.forEach(function (f) {
+      hash.update(JSON.stringify([f.key, f.payload.length]) + "\n");
+      hash.update(f.payload);
+    });
+    var version = hash.digest("hex");
+    var index = files.find(function (f) { return f.key === "index.html"; });
+    if (!index) throw new Error("the viewer index.html is missing — reinstall the skill");
+    return {
+      hash: version,
+      index: Buffer.from(versionIndexHtml(index.payload.toString("utf8"), version), "utf8"),
+      files: files.filter(function (f) { return f !== index; }).map(function (f) {
+        return { key: f.key.indexOf("assets/") === 0 ? "assets/" + version + "/" + f.key.slice(7) : f.key, payload: f.payload };
+      }),
+    };
+  }
+
+  function serverDirHash() {
+    return createViewerDeployment().hash;
   }
 
   function timestamp() {
@@ -95,15 +110,73 @@ function createPublishHelpers(skillDir, console = globalThis.console) {
     if (!text.trim()) throw new Error("document is empty after removing front matter");
     return Buffer.from(text, "utf-8");
   }
-  return { versionIndexHtml, listServerFiles, serverDirHash, timestamp, slugify, addTimestamp, prepareMarkdown };
+  return { versionIndexHtml, listServerFiles, serverDirHash, createViewerDeployment, timestamp, slugify, addTimestamp, prepareMarkdown };
 }
 
-module.exports = { createPublishHelpers };
+// A conservative, dependency-free XML reader for lifecycle read/modify/write.
+// Unsupported namespaces/DTDs or malformed input must stop a policy rewrite.
+// Keep original slices rather than serializing user-owned rules and settings.
+function parseLifecycleConfiguration(xml) {
+  if (!xml.trim()) return { opening: '<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">', rules: [], extras: "" };
+  var tokens = /<!--([\s\S]*?)-->|<\?[\s\S]*?\?>|<!\[CDATA\[[\s\S]*?\]\]>|<\/?[A-Za-z_][\w.-]*(?:\s+[\w.:-]+\s*=\s*(?:"[^"<>]*"|'[^'<>]*'))*\s*\/?>/g;
+  var stack = [], roots = [], cursor = 0, match;
+  function invalid() { throw new Error("not a LifecycleConfiguration in a supported, complete XML form; refusing to rewrite the lifecycle configuration"); }
+  while ((match = tokens.exec(xml))) {
+    var gap = xml.slice(cursor, match.index);
+    if (gap.includes("<") || (!stack.length && gap.trim())) invalid();
+    cursor = tokens.lastIndex;
+    var token = match[0];
+    if (token.startsWith("<!--") || token.startsWith("<?")) continue;
+    if (token.startsWith("<![CDATA[")) { if (!stack.length) invalid(); continue; }
+    var name = /^<\/?([\w.-]+)/.exec(token)[1];
+    if (token.startsWith("</")) {
+      var node = stack.pop();
+      if (!node || node.name !== name || token !== "</" + name + ">") invalid();
+      node.end = cursor;
+      node.innerEnd = match.index;
+    } else {
+      var node = {name: name, start: match.index, openEnd: cursor, end: cursor, innerEnd: cursor, children: []};
+      if (/\sxmlns\s*=/.test(token) && (!token.includes('xmlns="http://s3.amazonaws.com/doc/2006-03-01/"') && !token.includes("xmlns='http://s3.amazonaws.com/doc/2006-03-01/'"))) invalid();
+      if (stack.length) stack[stack.length - 1].children.push(node);
+      else roots.push(node);
+      if (!token.endsWith("/>")) stack.push(node);
+    }
+  }
+  if (stack.length || xml.slice(cursor).trim() || roots.length !== 1 || roots[0].name !== "LifecycleConfiguration") invalid();
+  var root = roots[0];
+  var rules = root.children.filter(function (node) { return node.name === "Rule"; });
+  var ours = 0, kept = [];
+  rules.forEach(function (rule) {
+    var ids = rule.children.filter(function (node) { return node.name === "ID"; });
+    if (ids.length > 1) invalid();
+    var id = ids.length ? xml.slice(ids[0].openEnd, ids[0].innerEnd).trim() : "";
+    if (id.includes("<")) invalid();
+    id = id.replace(/&#(x[\da-f]+|\d+);|&(amp|lt|gt|quot|apos);/gi, function (_text, number, entity) {
+      return number ? String.fromCodePoint(parseInt(number.replace(/^x/i, ""), /^x/i.test(number) ? 16 : 10)) : {amp: "&", lt: "<", gt: ">", quot: '"', apos: "'"}[entity.toLowerCase()];
+    });
+    if (id === "md-web-auto-expire") {
+      var prefixNodes = rule.children.filter(function (node) { return node.name === "Prefix"; });
+      var filters = rule.children.filter(function (node) { return node.name === "Filter"; });
+      if (filters.length) {
+        if (filters.length !== 1 || filters[0].children.length !== 1 || filters[0].children[0].name !== "Prefix") invalid();
+        prefixNodes = prefixNodes.concat(filters[0].children);
+      }
+      if (prefixNodes.length !== 1 || xml.slice(prefixNodes[0].openEnd, prefixNodes[0].innerEnd).trim() !== "md-web/" || ++ours > 1)
+        throw new Error("the md-web lifecycle ID is not uniquely scoped to md-web/; refusing to replace it");
+    } else kept.push(xml.slice(rule.start, rule.end));
+  });
+  var extras = "", at = root.openEnd;
+  rules.forEach(function (rule) { extras += xml.slice(at, rule.start); at = rule.end; });
+  extras += xml.slice(at, root.innerEnd);
+  return { opening: xml.slice(root.start, root.openEnd).replace(/\/>$/, ">"), rules: kept, extras: extras.trim(), hadRules: rules.length > 0 };
+}
+
+module.exports = { createPublishHelpers, parseLifecycleConfiguration };
 
 // Importing exposes helpers without reading config or starting an upload.
 if (require.main === module) {
   var SCRIPT_DIR = __dirname;
-  var { versionIndexHtml, listServerFiles, serverDirHash, addTimestamp, prepareMarkdown } = createPublishHelpers(SCRIPT_DIR, console);
+  var { createViewerDeployment, addTimestamp, prepareMarkdown } = createPublishHelpers(SCRIPT_DIR, console);
 
   // Two modes, deliberately separate. Publishing one document only ever writes
   // that one object; provisioning the viewer writes the site's root files and may
@@ -408,8 +481,7 @@ if (require.main === module) {
     });
   }
 
-  // Every request this script makes (PUT object, GET/PUT/DELETE ?lifecycle) is idempotent,
-  // so transient failures are retried: throttling (429), server errors (5xx), and network
+  // Object writes and reads retry transient failures: throttling (429), 5xx and network
   // errors — notably ECONNRESET on a keep-alive socket the server already closed, which
   // otherwise failed a whole setup run on one stale connection. 4xx answers are final.
   var MAX_ATTEMPTS = 3;
@@ -418,6 +490,9 @@ if (require.main === module) {
     return true; // no HTTP status: socket/DNS/timeout
   }
   function s3Fetch(method, resourcePath, query, payload, extraHeaders) {
+    // Replaying a bucket-wide replacement after a lost response can overwrite a
+    // policy edited since our read. Let the operator re-read on the next setup.
+    if (query === "lifecycle" && method !== "GET") return s3FetchOnce(method, resourcePath, query, payload, extraHeaders);
     var attempt = 0;
     function tryOnce() {
       attempt++;
@@ -441,20 +516,17 @@ if (require.main === module) {
 
   function cacheControlFor(remoteKey) {
     var ext = path.extname(remoteKey).toLowerCase();
-    if (ext === ".js" || ext === ".css") return CACHE_IMMUTABLE;
+    if (/^assets\/[a-f0-9]{64}\//.test(remoteKey) && (ext === ".js" || ext === ".css")) return CACHE_IMMUTABLE;
     return CACHE_SHORT;
   }
 
-  function putObject(payload, remoteKey) {
+  function putObject(payload, remoteKey, conditions) {
     var ct = getContentType(remoteKey);
     return s3Fetch("PUT", "/" + CONFIG.bucket + "/" + remoteKey, null, payload, {
       "Content-Type": ct,
       "Cache-Control": cacheControlFor(remoteKey),
+      ...conditions,
     }).then(function () { console.log("  OK  " + remoteKey); });
-  }
-
-  function uploadFile(localPath, remoteKey) {
-    return putObject(fs.readFileSync(localPath), remoteKey);
   }
 
   // ── Server Deployment and Lifecycle ──
@@ -476,8 +548,13 @@ if (require.main === module) {
   // Fingerprints the viewer, not the retention setting: whether the site files in the
   // bucket are the ones in this skill. Leaving expire_days out means editing the
   // expiry does not make a current deployment look unprovisioned.
+  var deployment;
+  function viewer() {
+    if (!deployment) deployment = createViewerDeployment();
+    return deployment;
+  }
   function deployFingerprint() {
-    return CONFIG.endpoint + "/" + CONFIG.bucket + "@" + serverDirHash();
+    return CONFIG.endpoint + "/" + CONFIG.bucket + "@" + viewer().hash;
   }
 
   // ── S3 Lifecycle Rule ──
@@ -501,27 +578,6 @@ if (require.main === module) {
       });
   }
 
-  // Rule elements cannot nest, so a non-greedy match is exact rather than a guess.
-  function rulesFrom(xml) {
-    var out = [];
-    var re = /<Rule(?:\s[^>]*)?>[\s\S]*?<\/Rule>/g;
-    var m;
-    while ((m = re.exec(xml))) {
-      if (m[0].indexOf("<ID>" + LIFECYCLE_RULE_ID + "</ID>") === -1) out.push(m[0]);
-    }
-    return out;
-  }
-
-  // Everything directly under <LifecycleConfiguration> that is not a <Rule>: S3 adds
-  // bucket-wide settings there (e.g. TransitionDefaultMinimumObjectSize) and a rewrite
-  // that re-emits only <Rule> elements deletes them without ever showing them.
-  function topLevelExtras(xml) {
-    var inner = String(xml || "")
-      .replace(/^[\s\S]*?<LifecycleConfiguration(?:\s[^>]*)?>/, "")
-      .replace(/<\/LifecycleConfiguration>\s*$/, "");
-    return inner.replace(/<Rule(?:\s[^>]*)?>[\s\S]*?<\/Rule>/g, "").trim();
-  }
-
   // Scoped to md-web's own uploads (the "md-web/" key prefix) — never the viewer
   // files at the bucket root, nor any unrelated object sharing the bucket.
   function expiryRule(days) {
@@ -532,14 +588,24 @@ if (require.main === module) {
       '</Rule>';
   }
 
-  function putLifecycle(rules, extras, transitionMinimum) {
-    var xml = '<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
+  function writeLifecycle(configuration, method, payload, headers) {
+    // The lifecycle API has no atomic per-rule/CAS operation. Detect edits since
+    // the initial read, and never blindly retry this bucket-wide replacement.
+    return readLifecycle().then(function (current) {
+      if (current.xml !== configuration.xml || current.transitionMinimum !== configuration.transitionMinimum)
+        throw new Error("lifecycle changed during setup; no policy written — serialize policy administration and retry");
+      return s3Fetch(method, "/" + CONFIG.bucket, "lifecycle", payload, headers);
+    });
+  }
+
+  function putLifecycle(rules, extras, transitionMinimum, opening, configuration) {
+    var xml = opening +
       (extras || "") + rules.join("") + '</LifecycleConfiguration>';
     var payload = Buffer.from(xml, "utf-8");
     var md5 = crypto.createHash("md5").update(payload).digest("base64");
     var headers = { "Content-Type": "application/xml", "Content-MD5": md5 };
     if (transitionMinimum) headers["x-amz-transition-default-minimum-object-size"] = transitionMinimum;
-    return s3Fetch("PUT", "/" + CONFIG.bucket, "lifecycle", payload, headers);
+    return writeLifecycle(configuration, "PUT", payload, headers);
   }
 
   function setLifecycleRule() {
@@ -553,35 +619,31 @@ if (require.main === module) {
       .then(function (configuration) {
         var existing = configuration.xml;
         var transitionMinimum = configuration.transitionMinimum;
-        // A 200 body we cannot parse is NOT "the bucket has no rules". Writing back
-        // only md-web's own rule would delete retention rules we never read, so an
-        // unreadable configuration aborts the write instead of overwriting it.
-        if (existing.trim() && !/<LifecycleConfiguration[\s>]/i.test(existing))
-          throw new Error("the bucket answered with something that is not a LifecycleConfiguration; refusing to rewrite the lifecycle configuration");
-        var others = rulesFrom(existing);
-        var extras = topLevelExtras(existing);
+        var parsed = parseLifecycleConfiguration(existing);
+        var others = parsed.rules;
+        var extras = parsed.extras;
         var wanted = days > 0 ? [expiryRule(days)] : [];
 
         if (!wanted.length && !others.length) {
           // Ours is gone and there is nothing of anyone else's left, so the honest end
           // state is an empty configuration — and getting there needs DELETE. Safe
           // precisely because the read above proved there is nothing left to lose.
-          if (!/<Rule[\s>]/.test(existing)) {
+          if (!parsed.hadRules) {
             console.log("  Lifecycle: nothing to remove");
             return null;
           }
           // DELETE removes the whole document, including top-level settings that are
           // not rules; keep those by rewriting a configuration with only the extras.
           if (extras) {
-            return putLifecycle([], extras, transitionMinimum).then(function () {
+            return putLifecycle([], extras, transitionMinimum, parsed.opening, configuration).then(function () {
               console.log("  Lifecycle: no expiry (the md-web rule was removed; other settings preserved)");
             });
           }
-          return s3Fetch("DELETE", "/" + CONFIG.bucket, "lifecycle")
+          return writeLifecycle(configuration, "DELETE")
             .then(function () { console.log("  Lifecycle: no expiry"); });
         }
 
-        return putLifecycle(wanted.concat(others), extras, transitionMinimum).then(function () {
+        return putLifecycle(wanted.concat(others), extras, transitionMinimum, parsed.opening, configuration).then(function () {
           console.log("  Lifecycle: " + (days > 0 ? days + " days (md-web/ only)" : "no expiry (only the md-web rule was removed)"));
         });
       })
@@ -598,19 +660,28 @@ if (require.main === module) {
   }
 
   function serverDeployed() {
-    // Local flag matches this bucket + the bundled viewer files → skip setup
+    // A local hint cannot establish remote shared state: another installation may
+    // have replaced or removed the entry point since this machine ran setup.
     try {
       if (fs.readFileSync(DEPLOYED_FLAG, "utf-8") === deployFingerprint()) {
-        return Promise.resolve(true);
+        return readViewer().then(function (remote) {
+          return remote !== null && remote.body === viewer().index.toString("utf8");
+        });
       }
     } catch (_) {}
     return Promise.resolve(false);
   }
 
+  function readViewer() {
+    return s3Fetch("GET", "/" + CONFIG.bucket + "/index.html")
+      .catch(function (e) {
+        if (e.statusCode === 404) return null;
+        throw e; // Never treat AccessDenied or a transport failure as absence.
+      });
+  }
+
   function deployServer() {
-    var all = listServerFiles();
-    var indexFile = all.filter(function (f) { return f.key === "index.html"; })[0] || null;
-    var files = all.filter(function (f) { return f.key !== "index.html"; });
+    var files = viewer().files;
 
     // Parallel upload (work-stealing, 4 concurrent)
     var concurrency = 4;
@@ -618,23 +689,30 @@ if (require.main === module) {
     function next() {
       if (idx >= files.length) return Promise.resolve();
       var file = files[idx++];
-      return uploadFile(file.full, file.key).then(next);
+      return putObject(file.payload, file.key).then(next);
     }
 
-    var workers = [];
-    for (var i = 0; i < Math.min(concurrency, files.length); i++) {
-      workers.push(next());
-    }
-
-    return Promise.allSettled(workers)
-      .then(function (results) {
+    return readViewer().then(function (remote) {
+      if (remote && !remote.headers.etag) throw new Error("SETUP_CONFLICT: index.html has no ETag; cannot safely replace it");
+      var conditions = remote ? { "If-Match": remote.headers.etag } : { "If-None-Match": "*" };
+      var workers = [];
+      for (var i = 0; i < Math.min(concurrency, files.length); i++) workers.push(next());
+      return Promise.allSettled(workers).then(function (results) {
         var failure = results.find(function (result) { return result.status === "rejected"; });
         if (failure) throw failure.reason;
-        // index.html last → atomicity. Stamp asset URLs with the bundle hash.
-        if (indexFile) {
-          var html = versionIndexHtml(fs.readFileSync(indexFile.full, "utf-8"), serverDirHash());
-          return putObject(Buffer.from(html, "utf-8"), indexFile.key);
-        }
+        // Versioned assets stay available to old pages. Switch the entry point
+        // last; its precondition prevents concurrent setups silently clobbering it.
+        return putObject(viewer().index, "index.html", conditions).catch(function (e) {
+          if (e.statusCode === 409 || e.statusCode === 412)
+            throw new Error("SETUP_CONFLICT: index.html changed during setup; inspect the active viewer before retrying");
+          throw e;
+        });
+      });
+    })
+      .then(function () { return readViewer(); })
+      .then(function (remote) {
+        if (!remote || remote.body !== viewer().index.toString("utf8"))
+          throw new Error("SETUP_CONFLICT: the active viewer differs after setup; no local deployment recorded");
       })
       .then(function () { return setLifecycleRule(); })
       .then(function () {

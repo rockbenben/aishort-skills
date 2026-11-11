@@ -9,8 +9,8 @@
  *
  * It also has to load *before* docsify.min.js, so that the guard has already
  * rewritten a hostile location.hash by the time docsify reads the route for the
- * first time. assets/ URLs get a ?v=<hash> stamp at deploy time, so this file is
- * re-fetched whenever the bundle changes.
+ * first time. Deployment puts assets in assets/<bundle-hash>/, so old pages
+ * keep loading their own bundle while a newer viewer is being provisioned.
  */
 (function () {
   "use strict";

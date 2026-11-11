@@ -35,8 +35,8 @@ it needs; use whichever path your agent documents.
 1. Install the skill (see above)
 2. On first use, the AI will guide you through bucket configuration
 3. The AI then provisions the viewer once — a separate step that writes the page shell
-   and its assets to your bucket, and again after any upgrade of the skill. It asks
-   you first, because that step rewrites shared state at the bucket root.
+   and its assets to your bucket, and again after an upgrade of the viewer. This
+   requires authorization covering the shared files at the bucket root.
 4. After that, tell the AI "share as a link" whenever you want to publish content as a web page
 
 ## What this touches
@@ -46,15 +46,17 @@ The complete list of what this skill does. Nothing outside it happens.
 - **Publishing one document** writes **exactly one object** — `md-web/<timestamp>-<slug>-<suffix>.md`
   — under the `md-web/` prefix of your bucket. It writes nothing else and deletes nothing.
 - **Provisioning the viewer** (`--setup`) is a **separate command**, never a side effect of
-  publishing. It **overwrites the viewer files at the bucket root** (`index.html`,
-  `README.md`, `assets/`) — shared state that every published link depends on.
+  publishing. It uploads `assets/<bundle-hash>/`, updates root `README.md`, then
+  conditionally replaces root `index.html`. These are shared viewer files; old
+  assets remain available to cached pages and existing document URLs stay unchanged.
 - **`expire_days`** is the only bucket administration, and it is **off unless you set it**.
   With it set, the setup step **reads** your bucket's lifecycle configuration and writes
   back **one rule of its own**, scoped to the `md-web/` prefix; `0` removes that rule
   again. Every other rule and every bucket-wide setting is preserved, and the uploads
   under that prefix are **auto-deleted after N days**.
 - **Local files:** it reads `~/.md-web/config.json` (your credentials and bucket settings)
-  and writes `~/.md-web/.deployed` (a deploy fingerprint).
+  and writes `~/.md-web/.deployed` (a deploy fingerprint hint). Before publishing,
+  it also reads remote `index.html` through your configured S3 endpoint.
 - **Nothing else.** No other bucket, no other key prefix, no other skill's files, no
   startup entry, no scheduled job, no background service, no third-party service, no
   telemetry.
@@ -65,8 +67,10 @@ endpoint you configured, writes the uploaded `.md` plus the viewer assets, may w
 lifecycle rule scoped to the `md-web/` prefix, creates and deletes at most one temporary
 file, touches no other skill, and installs nothing.
 
-Every state-changing step — publishing an object, provisioning the viewer, adding or
-changing `expire_days` — needs your go-ahead first; the AI asks before each one.
+A request for a public share link authorizes uploading that document, including a
+retry. The AI explains the public access before uploading. Viewer setup overwrites
+shared bucket-root files, and retention changes edit bucket policy. Each needs
+authorization covering that operation, which can be provided in the original request.
 
 ## Bucket Setup
 
@@ -146,14 +150,20 @@ Managing it needs an **Admin Read & Write** token. With a narrower token the set
 step still succeeds and a warning goes by in the output — set the rule in the dashboard
 instead. Re-run the one-time setup step after changing it.
 
+Lifecycle changes must be serialized with other administrators: S3 replaces the whole
+configuration and offers no atomic per-rule update. Setup checks for concurrent edits
+with a second read, rejects unsupported/incomplete XML or a conflicting rule ID, and
+does not replay failed policy writes. A race remains between that final read and write.
+A warning means retention needs verification; the viewer can still be used.
+
 ## Security
 
 - **Anything you upload is publicly accessible** at the returned URL, and there is no un-publish step (unless `expire_days` is set, which auto-deletes the uploaded file after N days) — never upload secrets, API keys, PII, or other sensitive content.
 - Credentials live in **plaintext** in `~/.md-web/config.json`, or in `MD_WEB_ACCESS_KEY` / `MD_WEB_SECRET_KEY` if you prefer to keep them out of a file. On macOS and Linux the script tightens the config file to owner-only access; protect it either way — don't commit it or share it.
 - **No elevated privileges.** That owner-only tightening is the only permission change the skill makes: a user-scoped change to a file in your own home directory, made by the script running as you. It never asks for root, never runs an elevated command, and touches no file outside your home directory and the bucket you configured.
 - **Use a dedicated bucket.** Uploads and any expiry rule are namespaced under `md-web/`, but a dedicated bucket keeps this skill's bucket-administration rights away from anything you actually care about.
-- **The viewer runs your Markdown as HTML on the page.** GFM, tables, `<details>` and inline HTML all render. Two things keep that in bounds: a route guard that only loads same-origin paths under `md-web/` (a crafted link cannot make the viewer fetch a document from another origin), and a Content-Security-Policy without `'unsafe-inline'`, so HTML inside a document cannot run script. What the policy does **not** stop is a document *inserting elements* into the page — so never publish Markdown that came from an untrusted source, and never let a document carry markup you did not write yourself. Readers should treat the page as public and untrusted: anyone who can write to the bucket can put content there.
-- **Language is yours.** This skill imposes no language requirement on the document you upload — publish it in the language its content is written in. The English README and the Chinese one (`README.zh.md`) describe the same skill; pick whichever you prefer, neither is required. The viewer's own chrome is English (`MD Web`, `Search`, `No results found`); the word counter follows the uploaded document's own content. Nothing here translates, rewrites or checks the language of what you upload.
+- **The viewer runs your Markdown as HTML on the page.** GFM, tables, `<details>` and inline HTML all render. Two things keep that in bounds: a route guard that only loads same-origin paths under `md-web/` (a crafted link cannot make the viewer fetch a document from another origin), and a Content-Security-Policy without `'unsafe-inline'`, so HTML inside a document cannot run script. What the policy does **not** stop is a document *inserting elements* into the page — so review unfamiliar Markdown and inline HTML before publishing; source authorship alone is not a safety check. Readers should treat the page as public and untrusted: anyone who can write to the bucket can put content there.
+- Documents keep their original language. The viewer interface is English; the word counter follows the document content.
 
 ## File Structure
 
@@ -174,10 +184,23 @@ md-web/                     # Skill directory (managed by ClawHub, may be replac
 
 ~/.md-web/                  # User data directory (preserved across upgrades)
 ├── config.json           # Bucket credentials & settings (created on first use)
-└── .deployed             # Deploy fingerprint (tracks server deployment state)
+└── .deployed             # Local deployment hint, checked against the remote entry point
 ```
 
-`upload.js` fingerprints the files in `docsify-server/` (dot-files are ignored and never uploaded) and stores the result in `~/.md-web/.deployed`. When the bundled viewer changes after an upgrade, publishing stops with `SETUP_REQUIRED` until the setup step is run once more.
+`upload.js` snapshots and fingerprints `docsify-server/` (dot-files are ignored), puts
+assets in `assets/<bundle-hash>/`, and switches `index.html` only after all files upload.
+The local hint plus a read of the active remote entry point detects viewer upgrades,
+deletion or another installation replacing it. Publishing stops with `SETUP_REQUIRED`
+until an explicit setup. Old document links and the landing README path remain valid.
+
+Setup uses an ETag precondition (`If-Match`, or `If-None-Match: *` on first deployment).
+`SETUP_CONFLICT` stops a competing replacement; inspect the active viewer before
+retrying. A provider must support conditional object writes and return ETags; there is
+no unconditional fallback. This follows [S3 conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)
+and [R2's S3 compatibility](https://developers.cloudflare.com/r2/api/s3/api/).
+The first upgrade from the old flat-asset layout needs setup once. Old flat assets and
+version directories are retained, including files left by interrupted uploads; this
+tool does not perform automatic cleanup or change lifecycle scope to remove them.
 
 ## Other S3-Compatible Services
 
@@ -189,4 +212,5 @@ Besides Cloudflare R2, this skill works with any S3-compatible object storage:
 - **Wasabi**: endpoint is `s3.REGION.wasabisys.com`
 - **Tencent Cloud COS**: endpoint is `cos.REGION.myqcloud.com`
 
-Any service that provides an S3-compatible API and a public access URL will work.
+The provider also needs object reads, ETags and conditional object writes for safe
+viewer setup. Check those capabilities when using an S3-compatible service.

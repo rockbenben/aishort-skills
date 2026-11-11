@@ -55,6 +55,7 @@ async function runSetup(config, s3) {
     writeFileSync(join(home, ".md-web", "config.json"), JSON.stringify(config));
     const calls = [];
     const out = [];
+    let index = null;
 
     const fakeHttps = {
       Agent: class { destroy() {} },
@@ -66,7 +67,11 @@ async function runSetup(config, s3) {
           on(event, fn) { listeners[event] = fn; return req; },
           end(payload) {
             if (payload) call.body = Buffer.from(payload).toString("utf-8");
-            const res = s3(call);
+            const isIndex = call.path === '/' + config.bucket + '/index.html';
+            const res = isIndex && call.method === 'GET'
+              ? index === null ? {status: 404} : {status: 200, body: index, headers: {etag: '"index"'}}
+              : s3(call);
+            if (isIndex && call.method === 'PUT' && res.status >= 200 && res.status < 300) index = call.body;
             const rs = { statusCode: res.status, headers: res.headers || {} };
             rs.on = (ev, fn) => { rs[ev] = fn; return rs; };
             callback(rs);
@@ -133,13 +138,13 @@ const okPut = (call) => ({ status: 200, body: "" });
       : okPut(call));
   const lc = lifecycleOf(run.calls);
   const put = lc.find((c) => c.method === "PUT");
-  if (lc.map((c) => c.method).join(",") !== "GET,PUT")
-    fail(`expected exactly a GET then a PUT, got ${lc.map((c) => c.method).join(",") || "nothing"}${why(run)}`);
+  if (lc.map((c) => c.method).join(",") !== "GET,GET,PUT")
+    fail(`expected an initial read, a conflict check then a PUT, got ${lc.map((c) => c.method).join(",") || "nothing"}${why(run)}`);
   else if (!put.body.includes("<ID>md-web-auto-expire</ID>") || !put.body.includes("<Days>30</Days>"))
     fail(`the written rule is missing our ID or days:\n${put.body}`);
   else if (!put.body.includes("<Prefix>md-web/</Prefix>"))
     fail("the written rule is not scoped to the md-web/ prefix");
-  else pass("expire_days 30 on an empty bucket → GET then PUT, one rule scoped to md-web/");
+  else pass("expire_days 30 on an empty bucket → read, conflict check then PUT, one rule scoped to md-web/");
 }
 
 // ── Existing config: the user's own rules survive a change of expire_days ──
@@ -192,8 +197,8 @@ const okPut = (call) => ({ status: 200, body: "" });
       ? (call.method === "GET" ? { status: 200, body: xml([OUR_RULE(30)]) } : okPut(call))
       : okPut(call));
   const lc = lifecycleOf(calls);
-  if (lc.map((c) => c.method).join(",") !== "GET,DELETE")
-    fail(`expected GET then DELETE, got ${lc.map((c) => c.method).join(",") || "nothing"}`);
+  if (lc.map((c) => c.method).join(",") !== "GET,GET,DELETE")
+    fail(`expected read, conflict check then DELETE, got ${lc.map((c) => c.method).join(",") || "nothing"}`);
   else pass("expire_days 0 on a bucket holding only our rule → DELETE, after proving nothing else was there");
 }
 
@@ -253,7 +258,7 @@ for (const expire_days of ["forever", 0.5, false, " ", -1, "1.5"]) {
   const run = await runSetup({ ...baseConfig }, () => ({ status: 500, body: "<Error><Code>InternalError</Code></Error>" }));
   // The budget is per request: every upload is tried once and then retried twice.
   const byPath = new Map();
-  for (const c of run.calls) byPath.set(c.path, (byPath.get(c.path) || 0) + 1);
+  for (const c of run.calls.filter(c => c.method === 'PUT')) byPath.set(c.path, (byPath.get(c.path) || 0) + 1);
   const attempts = [...byPath.values()];
   if (!attempts.length || !attempts.every((n) => n === 3)) fail(`a persistent 500 was not retried up to the budget (${JSON.stringify([...byPath])})${why(run)}`);
   else if (!run.out.some((l) => l.includes("retry 2/2"))) fail(`no second-retry note in the output${why(run)}`);
