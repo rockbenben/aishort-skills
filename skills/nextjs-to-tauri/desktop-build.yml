@@ -192,7 +192,7 @@ jobs:
           releaseAssetNamePattern: "[mainBinaryName]_[version]_[arch][_setup][ext]"
           args: ${{ matrix.args }}
 
-      # Portable "green" exe (Windows only): the raw self-contained binary tauri
+      # Portable exe (Windows only; WebView2 still required): the raw app binary tauri
       # builds anyway. No installer; needs the WebView2 runtime; does NOT self-update.
       # Version comes from the action's appVersion output — the version tauri actually
       # built with (tauri.conf.json, written by `yarn update-version`). Re-reading

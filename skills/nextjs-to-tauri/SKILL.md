@@ -3,7 +3,7 @@ name: nextjs-to-tauri
 description: Use when converting a Next.js 16 App Router static export into a Tauri 2 desktop app. Next.js 静态导出转 Tauri 2 / 打包 Next.js 为 Tauri 桌面应用. Covers native shell, tray, optional updater and GitHub Actions. Existing Tauri maintenance uses desktop-app-standard.
 
 metadata:
-  version: "1.1.16"
+  version: "1.1.18"
   openclaw:
     homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/nextjs-to-tauri
     emoji: "🦀"
@@ -20,7 +20,7 @@ metadata:
 
 ## Overview
 
-Wrap a **client-side** Next.js 16 (App Router) app in a thin Tauri 2 native shell. Preserve web behavior while adding the export configuration and desktop integrations needed. Tauri serves the export from its embedded asset server. GitHub Actions can build the native shell when a local Rust toolchain is unavailable.
+Wrap a **static-exportable** Next.js 16 (App Router) app in a thin Tauri 2 native shell. Preserve web behavior while adding the export configuration and desktop integrations needed. Tauri serves the export from its embedded asset server. GitHub Actions can build the native shell when a local Rust toolchain is unavailable.
 
 **Core principle:** Tauri loads the static export over its own asset protocol — which behaves differently from a real HTTP server. Most migration pain is path/routing resolution, not React.
 
@@ -31,6 +31,8 @@ Wrap a **client-side** Next.js 16 (App Router) app in a thin Tauri 2 native shel
 
 A live Node server, runtime API routes, SSR or server actions require a different packaging design, such as a separately assessed sidecar. This playbook covers Next.js static exports.
 
+Keep Server Components and GET handlers that resolve fully at build time; verify their exported files rather than converting the whole app to `"use client"`. Desktop hooks alone need the client boundary shown in the integration template. See [static-export support](https://nextjs.org/docs/app/guides/static-exports#supported-features).
+
 ## Project changes
 
 Adapt templates into the target project: Next config and package scripts, `src-tauri/`, selected desktop frontend code, icons, ignore rules and the build workflow. Preserve unrelated web behavior. Migration authorization covers these necessary local changes; do not add a separate approval before every file write. Signing-service configuration and publication follow the user's authorized scope.
@@ -38,6 +40,8 @@ Adapt templates into the target project: Next config and package scripts, `src-t
 ## Procedure
 
 Adapt these steps to the repository. Supporting files contain the configuration and code templates.
+
+Read-only assessment stops at findings and proposed checks. The bundled workflow verifies a draft before manual publication; `desktop-app-standard` has a separate direct-publication default. Preserve the requested release policy rather than mixing those workflows.
 
 **Package manager:** the commands and `desktop-build.yml` assume Yarn Classic. In an npm or pnpm repo substitute the equivalent (`npm ci` / `pnpm install --frozen-lockfile`, `npx tauri` / `pnpm tauri`) and change the workflow's `cache:` and install line — `cache: yarn` fails outright when there is no `yarn.lock`.
 
@@ -64,14 +68,15 @@ Adapt these steps to the repository. Supporting files contain the configuration 
    import createNextIntlPlugin from "next-intl/plugin";
    const withNextIntl = createNextIntlPlugin();
 
-   const isDev = process.env.NODE_ENV === "development";
    const isTauri = process.env.TAURI_BUILD === "1"; // set by `yarn build:tauri`
 
    const nextConfig: NextConfig = {
      // ...your existing config...
-     ...(isDev ? {} : { output: "export" }),       // export is build-only (gotcha #2)
-     ...(isTauri ? { trailingSlash: true } : {}),   // Tauri-only (gotcha #1)
-     images: { unoptimized: true },
+     ...(isTauri ? { output: "export", trailingSlash: true } : {}),
+     images: {
+       // ...preserve existing image settings...
+       ...(isTauri ? { unoptimized: true } : {}),
+     },
    };
 
    export default withNextIntl(nextConfig);  // keep your existing wrapper(s)
@@ -98,7 +103,7 @@ Adapt these steps to the repository. Supporting files contain the configuration 
 
 4. **Edit `src-tauri/` config & Rust.** Adapt `tauri-files.md`, including its CSP and optional-updater checklist: `tauri.conf.json` (window `url`, updater, `webviewInstallMode`, portable `mainBinaryName`), `Cargo.toml` (plugin deps + release profile), `src/lib.rs` (plugin registration + tray + single-instance), `capabilities/default.json` (permissions).
 
-5. **Frontend integration** (only the features you need). Adapt `frontend-integration.md` to the project's existing desktop boundary (the examples use `src/app/desktop/`): external-links util (opener-based), auto-update hook, and — for `next-intl` apps — the language-choice hook (it remembers the locale the **user** picked in the switcher). Mount them in one `"use client"` component rendered inside your providers (e.g. antd `<App>`, inside `NextIntlClientProvider`). That component also installs the global external-link interceptor (gotcha #10). Switch locales with plain `router.push` (soft nav works in Tauri — never hard-nav a switch); if you remember the language, guard the launch redirect with a module-level flag (gotcha #11).
+5. **Frontend integration** (only the features you need). Adapt [frontend-integration.md](frontend-integration.md) to the project's existing desktop boundary (the examples use `src/app/desktop/`): external-links util (opener-based), auto-update hook, and — for `next-intl` apps — the language-choice hook (it remembers the locale the **user** picked in the switcher). Mount them in one `"use client"` component rendered inside your providers (e.g. antd `<App>`, inside `NextIntlClientProvider`). That component also installs the global external-link interceptor (gotcha #10). Switch locales with plain `router.push` (soft nav works in Tauri — never hard-nav a switch); if you remember the language, guard the launch redirect with a module-level flag (gotcha #11).
    The supplied updater downloads in the background before asking to install; include it only when that matches the product's update policy. Timing and network behavior are documented in `frontend-integration.md`.
 
 6. **Version single-source + CI.** Add `src-tauri/update-version.cjs` and an `update-version` script (copies `package.json` version into `tauri.conf.json`). Copy `desktop-build.yml` for cross-platform builds, signing, draft release with `latest.json`, and the portable-exe steps. Copy [release-assets.mjs](release-assets.mjs) into the app at `.github/scripts/release-assets.mjs`. The verifier compares the exact draft files and digests with per-target evidence from this workflow run before generating checksums and attestation.
@@ -108,31 +113,7 @@ Adapt these steps to the repository. Supporting files contain the configuration 
    - **If you skip injection, the pushed git tag MUST equal `package.json` version** (`v3.0.0` ↔ `"version": "3.0.0"`). `tauri-action` expands `__VERSION__` from the app version, and the portable-exe step uploads to `v${APP_VERSION}` — a mismatch silently breaks the portable upload.
    - **Verify signing by platform.** Updater signatures and OS code signing are separate. Configure the required Windows/macOS signing and notarization for the actual distribution, and report unsigned or unverified paths rather than assuming the template covers them.
 
-7. **Auto-update signing keys** (only if shipping updates):
-   ```bash
-   yarn tauri signer generate --ci -p "" -w src-tauri/app.key   # private key — gitignore it, NEVER commit (gotcha #7)
-   cat src-tauri/app.key.pub   # paste this base64 into tauri.conf.json plugins.updater.pubkey
-   ```
-   > **Signing secrets the release workflow needs:** the private key has to be stored as a
-   > repository secret named `TAURI_SIGNING_PRIVATE_KEY` (plus
-   > `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` when the key has a password). Without them the CI
-   > signing step fails and **no updater artifacts are produced**. The private key file
-   > itself must never be committed.
-   >
-   > Do **not** add `-f` to `signer generate`: it force-overwrites an existing key file,
-   > which would invalidate the key already published in `plugins.updater.pubkey`.
-   >
-   > Set the secrets when credentials and authorization are available; otherwise hand off the exact missing setup:
-   ```bash
-   gh secret set TAURI_SIGNING_PRIVATE_KEY < src-tauri/app.key   # bash / Git Bash
-   # only if you generated the key WITH a password (not `-p ""`):
-   gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-   ```
-   **PowerShell** has no `<` redirection — pipe instead:
-   ```powershell
-   Get-Content src-tauri/app.key -Raw | gh secret set TAURI_SIGNING_PRIVATE_KEY
-   ```
-   Manual path: repo → Settings → Secrets and variables → Actions → New repository secret.
+7. **Configure update signing only when needed.** Follow [Updater signing keys](tauri-files.md#updater-signing-keys) for generation, public/private key handling, existing-key preservation and repository secrets. Never commit or silently replace a private key.
 
 8. **Verify the frontend export:** `yarn build:tauri`, then confirm the export shape:
    ```bash
@@ -149,19 +130,19 @@ Report the generated package and checks actually performed. Hand off only unfini
 | # | Gotcha | Fix |
 |---|--------|-----|
 | 1 | **White screen / flat files.** The asset server may not resolve an extensionless path to `en.html`. | For this directory-index template, use `trailingSlash: true` in the desktop export and enter the configured locale directory, e.g. `/en/`. Keep the window URL and frontend default locale consistent. `TAURI_BUILD` makes the build choice explicit; retain another verified configuration when appropriate. |
-| 2 | **`output: "export"` and middleware do not fit together in Next 16.** Next's static-export docs put **Proxy** (Next 16's name for middleware) and Internationalized Routing under *unsupported features*, so next-intl's locale-detection proxy cannot run in an exported build. next-intl's own static-export page still pairs `withNextIntl({ output: "export" })` with a `proxy.ts`, which is why the trap is easy to fall into. | Make `output` build-only (`isDev ? {} : {...}`) so dev keeps redirecting and only the export drops the proxy. |
+| 2 | **Runtime locale middleware is unavailable in static export.** | Gate desktop export with `TAURI_BUILD` so ordinary web builds keep their configuration. Validate exported locale entry files instead of relying on Proxy redirects; see [Next.js static-export limits](https://nextjs.org/docs/app/guides/static-exports#unsupported-features). |
 | 3 | **`src-tauri/` vanishes from `git status`.** Some repo `.gitignore`s have a bare `src-tauri` line. | Replace with `src-tauri/target` + `src-tauri/gen/schemas`. Verify: `git check-ignore src-tauri/tauri.conf.json` returns nothing. |
 | 4 | **`isTauri()` false positives** if you detect by dynamic-importing `@tauri-apps/api`. It imports fine in a plain browser; `invoke` only throws at call time. | Detect via runtime globals: `window.__TAURI_INTERNALS__` / `__TAURI__` / UA contains `Tauri`. Same bundle ships to web + desktop. |
 | 5 | **Single-instance plugin must be registered FIRST**, before all other plugins, or second-launch refocus won't route. Desktop-only (target-gate it off mobile). | See `lib.rs` ordering in `tauri-files.md`. |
 | 6 | **CI succeeds but clients see no update.** Stable `releases/latest` ignores draft and prerelease releases. | Check the actual endpoint and publication state. The supplied workflow verifies a draft before publication; do not delete a published release to make a draft-only rerun work. Use a new version for published corrections, or adapt to the repository's existing publication policy. |
 | 7 | **Committing the private signing key** lets anyone sign malicious auto-updates your clients auto-trust. The `.pub` is public/safe; the bare key is not. | `.gitignore` the private key; store it only as a GitHub secret. If one ever lands in git history, rotate it. |
-| 8 | **Portable "green" exe + auto-update are incompatible.** `update.install()` expects an installed-app layout; on a standalone exe it fails/no-ops. The portable exe also needs the **WebView2** runtime (preinstalled Win 11 / current Win 10; absent on old LTSC/Server). | It's the raw `target/release/<mainBinaryName>.exe` (web assets compiled in). Ship it for convenience, but document "no self-update" and the WebView2 dependency. `install()` **rejects** here, so the hook's `onOk` must await it inside a `try/catch` and say so in the UI — without that the user confirms an install and nothing visibly happens. You can't cleanly detect "am I portable?" at runtime — it's the *same* compiled binary as the one inside the installers — so to truly hide the update prompt you'd produce a separate build with the updater plugin disabled. |
+| 8 | **Portable exe is mistaken for an installed, self-updating app.** | The raw binary still needs WebView2 and is distributed without a self-update guarantee. Catch and surface install failures; test any proposed portable update path separately. If portable builds must make no updater requests, use the [no-updater checklist](tauri-files.md#optional-updater-keep-the-layers-consistent) or another verified package-specific switch. |
 | 9 | **System-language detection returns the wrong or unsupported locale.** | Preserve the product's language policy. The example starts at the configured default and remembers an explicit choice. If auto-detection is wanted, validate against supported locales with a fallback and never overwrite an existing user preference. |
 | 10 | **External links replace the app page or opener calls are denied.** | Route intended external URLs through plugin-opener and keep internal links with the router. Grant the needed URL scopes: `opener:default` covers common schemes, or use explicit scoped permissions. A bare command permission without matching scope is insufficient. |
 | 11 | **Locale switching bounces back.** Startup redirects or hard reloads run again after the locale layout remounts. | Prefer soft router navigation. Keep the startup guard stable across remounts (the example uses a module variable), and persist explicit choices after startup restoration so the entry locale cannot overwrite a saved preference. |
 | 12 | **Linux aborts with EGL errors or an AppImage opens blank.** | Distinguish WebKit DMABUF failure from bundled Wayland/host library incompatibility before applying workarounds; see [Linux diagnosis](tauri-files.md#linux-egl-与-appimage-兼容性). |
-| 13 | **A CI fix on `main` doesn't apply to the release; or the release comes out empty / with mismatched installers.** Tag-triggered runs execute the workflow definition **from the tagged commit**, not the branch tip — tag a commit whose history predates your fix and the *old* workflow runs (or a newly-added `push: tags` trigger never fires at all). Separately, pointing `tagName` at `github.ref_name` ships a release *named* `v3.0.1` containing `..._3.0.0_...` installers, because installer names + embedded version come from `tauri.conf.json`, not `tagName` (and on `workflow_dispatch`, `github.ref_name` is a branch name). | Cut the `v*` tag from a commit that already contains the corrected workflow. A published release is repaired with a new tag containing the fix. An unpublished draft can be rebuilt from its original source commit; stale assets must be reviewed before rerunning draft verification. For version coherence, inject the tag into `package.json` at build time (step 6), don't fiddle with `tagName`. **Multi-app "release hub"** (one tag on `main` fans out to Tauri + Electron, each workflow reading its full source SHA from a source map committed in that tag): keep the source map and workflows in the release tag commit. Every commit that may receive a triggering tag must carry its applicable workflow. |
+| 13 | **Tag workflow misses a CI fix, builds mismatched versions or uploads no assets.** | The tag commit must contain the applicable workflow. Follow step 6 for version injection and the workflow verifier. For a multi-app release hub, keep its full-SHA source map in that release commit and preserve it on reruns. Repair a published version with a new tag; review stale assets before rerunning an unpublished draft. |
 
 ## Validation boundary
 
-Confirm the static export locally and verify native startup, tray, locale persistence and updater behavior on the supported platforms. A frontend build or CI compile alone does not prove desktop behavior. Package sizes come from the generated assets, not a fixed estimate.
+Confirm the export and native startup, tray, locale persistence and any updater behavior on supported platforms. Include offline/portable constraints and measured package sizes in the delivery record above. A frontend build or CI compile alone does not prove desktop behavior.

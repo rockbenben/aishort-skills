@@ -384,9 +384,9 @@ function snippet(file, heading, language) {
   const fence = section.indexOf(marker);
   assert.notEqual(fence, -1, `Missing ${language} block in ${heading}`);
   const start = fence + marker.length;
-  const end = section.indexOf('\n```', start);
+  const end = section.slice(start).search(/\n[ \t]*```/);
   assert.notEqual(end, -1, `Unclosed code block in ${heading}`);
-  return section.slice(start, end);
+  return section.slice(start, start + end);
 }
 
 test('Electron templates run with CommonJS and ESM project roots', () => {
@@ -456,6 +456,23 @@ test('Electron window movement is coalesced and close saves final bounds', t => 
   assert.equal(writes[2].maximized, true);
   t.mock.timers.tick(150);
   assert.equal(writes.length, 3);
+});
+
+test('Tauri export configuration leaves ordinary web builds unchanged', () => {
+  const source = snippet('skills/nextjs-to-tauri/SKILL.md', '2. **Gate static export', 'ts');
+  const runnable = stripTypeScriptTypes(source
+    .replace(/^\s*import .*;\s*$/gm, '')
+    .replace('export default withNextIntl(nextConfig);', 'globalThis.config = withNextIntl(nextConfig);'));
+  for (const nodeEnv of ['development', 'production']) {
+    for (const desktop of [false, true]) {
+      const context = {process: {env: {NODE_ENV: nodeEnv, TAURI_BUILD: desktop ? '1' : undefined}},
+        createNextIntlPlugin: () => config => config};
+      vm.runInNewContext(runnable, context);
+      assert.equal(context.config.output, desktop ? 'export' : undefined);
+      assert.equal(context.config.trailingSlash, desktop ? true : undefined);
+      assert.equal(context.config.images.unoptimized, desktop ? true : undefined);
+    }
+  }
 });
 
 test('Tauri documented version command works in CommonJS and ESM projects', () => {

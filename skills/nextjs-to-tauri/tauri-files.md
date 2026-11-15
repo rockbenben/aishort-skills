@@ -302,6 +302,34 @@ console.log(`Updated tauri.conf.json version -> ${pkg.version}`);
 
 `package.json` scripts to add: `"tauri": "tauri"`, `"update-version": "node src-tauri/update-version.cjs"`, and `"build:tauri": "cross-env TAURI_BUILD=1 next build"` (the flag that turns on `trailingSlash` — gotcha #1; `yarn add -D cross-env`).
 
+## Updater signing keys
+
+Read only when shipping updates. Reuse the existing key and client trust chain; generate a new key only for an unconfigured application:
+```bash
+yarn tauri signer generate --ci -p "" -w src-tauri/app.key   # private key — gitignore it, NEVER commit (gotcha #7)
+cat src-tauri/app.key.pub   # paste this base64 into tauri.conf.json plugins.updater.pubkey
+```
+> **Signing secrets the release workflow needs:** the private key has to be stored as a
+> repository secret named `TAURI_SIGNING_PRIVATE_KEY` (plus
+> `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` when the key has a password). Without them the CI
+> signing step fails and **no updater artifacts are produced**. The private key file
+> itself must never be committed.
+>
+> Do **not** add `-f` to `signer generate`: it force-overwrites an existing key file,
+> which would invalidate the key already published in `plugins.updater.pubkey`.
+>
+> Set the secrets when credentials and authorization are available; otherwise hand off the exact missing setup:
+```bash
+gh secret set TAURI_SIGNING_PRIVATE_KEY < src-tauri/app.key   # bash / Git Bash
+# only if you generated the key WITH a password (not `-p ""`):
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+```
+**PowerShell** has no `<` redirection — pipe instead:
+```powershell
+Get-Content src-tauri/app.key -Raw | gh secret set TAURI_SIGNING_PRIVATE_KEY
+```
+Manual path: repo → Settings → Secrets and variables → Actions → New repository secret.
+
 ## Optional updater: keep the layers consistent
 
 If updates are not part of the product, remove the updater/process JS dependencies, hooks and mount calls; matching Cargo dependencies and Rust plugin registrations; `updater:default` / `process:allow-restart` permissions; and `plugins.updater` / `bundle.createUpdaterArtifacts`. Keep any process API still used by other features.
