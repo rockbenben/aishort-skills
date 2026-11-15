@@ -193,9 +193,7 @@ w.SourceInitialized += (_, _) => {
 
 三个点容易写错。一是别用 `SystemParameters.WorkArea`，它给的是**主屏**的工作区，而声明了 PerMonitorV2 之后不存在「整个桌面一个尺寸」，对话框又通常是 `CenterOwner`，主窗口在副屏时就错了。二是 DPI 换算直接用 `VisualTreeHelper.GetDpi(窗口)`，PerMonitorV2 下它返回的就是该窗口那块屏的缩放，不必自己去 P/Invoke `GetDpiForMonitor`。三是 `GetMonitorInfo` 的返回值必须判：不判的话探测失败时 `mi.rcWork` 全是零，`cap` 算成负数，`Math.Max(cap, w.MinHeight)` 会把窗口按到 `MinHeight` 上——那可不是「退回 XAML 里那个保守值」，而是把对话框压成一条。
 
-XAML 中保留按最小支持工作区选定的兜底值，供显示器探测失败时使用；不要沿用原先已知会溢出的高度。最小工作区按缩放后的 DIP 计算，例如 768px 高、150% 缩放、48 DIP 任务栏约剩 464 DIP，仍需扣除应用边距。这只是测试样例，不是所有应用的固定上限。
-
-验证窗口级上限与主按钮的实际屏幕边界。源码扫描可提示遗漏，但内部控件的 `MaxHeight`、绑定值或共享行为需结合布局核对；测试不要只匹配某个辅助函数名。
+XAML 保留按最小支持工作区选定的兜底值，供探测失败时使用；工作区 DIP 样例及运行时按钮边界验收统一见[布局检查](dev-switches.md#截图的盲区)，不要沿用已知会溢出的旧上限。
 
 ### 窗口封顶了，正文和按钮仍可能在屏外
 
@@ -211,7 +209,7 @@ w.SourceInitialized += (_, _) => {
 };
 ```
 
-窗口的 `MaxHeight` 仍然保留，但它是第二道；透明窗上它可能约束不住 `SizeToContent` 的实际排版。验收时断言主按钮的屏幕 rect 在 `GetMonitorInfo(...).rcWork` 内；至少用一条超长文本、最紧的工作区档和副屏各跑一次。
+保留窗口 `MaxHeight`，另用超长正文覆盖此分支，按[布局验收](dev-switches.md#截图的盲区)检查实际按钮位置。
 
 ## 深色应用配了个白色标题栏
 
@@ -235,7 +233,7 @@ AppDomain.CurrentDomain.UnhandledException  // 其他线程
 TaskScheduler.UnobservedTaskException       // 没有 await 的 Task
 ```
 
-仅对可恢复的 UI 异常设置 `e.Handled = true` 并提示；无法保证状态一致时不要强行继续运行。`AppDomain` 那个进来时进程已经在终止；`TaskScheduler` 那个默认不杀进程（.NET 4.5 起未观察的任务异常不再升级，.NET Core / 5+ 沿用这个默认），但异常已经发生、还要等 GC 回收任务时才浮出来——两个都只能把堆栈写进日志。日志不用引框架，往配置文件所在目录追加一行时间戳加异常就行——绿色版跟着 exe 走，装到系统里就在 `%APPDATA%\Xxx\`。
+仅对可恢复的 UI 异常设置 `e.Handled = true` 并提示；无法保证状态一致时不要强行继续运行。`AppDomain` 那个进来时进程已经在终止；`TaskScheduler` 那个默认不杀进程（.NET 4.5 起未观察的任务异常不再升级，.NET Core / 5+ 沿用这个默认），但异常已经发生、还要等 GC 回收任务时才浮出来——两个都只能把堆栈写进日志。日志可简单追加时间戳与异常，写到产品约定的可写数据目录；不要因便携形态就假定 exe 同级可写，也不为日志放宽受保护程序目录权限。
 
 三个入口都挂了、日志还是空的，就要考虑第四种消失：**它不是异常，是某处代码正常地调了 `Shutdown()`**——异常处理器一个都不会响。临时给关闭事件挂个栈探针，让肇事者自报家门：
 
@@ -350,17 +348,13 @@ FrameworkElement.LanguageProperty.OverrideMetadata(
 
 ## 测试工程引用 App 就报 NETSDK1151
 
-`RuntimeIdentifier`、`SelfContained`、`PublishSingleFile` 这几个属性要写进 `Properties/PublishProfiles/` 下的 pubxml，别写进 csproj。
-
-写进 csproj 有两个后果。一是日常的 `dotnet build` 和 `dotnet run` 也会走 RID 专属加单文件加压缩的路径，开发时每次构建都白等。二是自包含的可执行工程不能被别的工程引用，测试工程一旦 `ProjectReference` 到它就直接报 `NETSDK1151`，而 xunit.v3 的测试工程恰好也是 exe。实际就这么撞上过一次，只能先把发布属性搬进 pubxml 才能继续迁测试框架。
-
-两份 profile 之间有三处容易抄错：`EnableCompressionInSingleFile` 只对自包含成立，框架依赖传它会以 `NETSDK1176` 直接失败；`PublishDir` 要给不同目录，否则两种发布连着跑会互相覆盖；`IncludeNativeLibrariesForSelfExtract` 决定原生 DLL 是否嵌入并在启动时提取，与是否自包含分开判断；不嵌入的应用原生 DLL 必须随包交付，见 `project-setup.md`。
+先检查发布属性是否写在 csproj，导致测试引用了自包含可执行工程；这些属性也会影响日常 build/run。将 `RuntimeIdentifier`、`SelfContained`、`PublishSingleFile` 移入 [pubxml](project-setup.md#发布四份-pubxmlx64--arm64--自包含--框架依赖csproj-一个发布属性都不放)。该节也统一说明压缩、原生库提取和独立输出目录；`NETSDK1176` 则检查是否为框架依赖包启用了单文件压缩。不在测试工程再补一套相反属性。
 
 ## 开了 ReadyToRun 反而更慢
 
 压体积别往 `PublishTrimmed` 和 NativeAOT 上想，[微软官方文档](https://learn.microsoft.com/dotnet/core/deploying/trimming/incompatibilities)写得很直接：WPF 大量用反射，裁剪后几乎跑不起来，所以 .NET SDK 里 WPF 的裁剪支持是关闭状态。剩下的就只有 `EnableCompressionInSingleFile` 和 `PublishReadyToRun`，后者默认别开。
 
-压缩那个也别当免费午餐：[官方文档](https://learn.microsoft.com/dotnet/core/deploying/single-file/overview#compress-assemblies-in-single-file-apps)明说「压缩有性能代价，启动时程序集要解压进内存」，并建议**开之前把体积和启动时间都量一遍**，因为影响因应用而异。自包含那份为了「下载即用」值得付，框架依赖那份本来就小，付了未必划算。
+压缩也有启动时解压成本，需一起测量包体积与启动时间。[官方说明](https://learn.microsoft.com/dotnet/core/deploying/single-file/overview#compress-assemblies-in-single-file-apps)。压缩可用范围按 [pubxml 配置](project-setup.md#发布四份-pubxmlx64--arm64--自包含--框架依赖csproj-一个发布属性都不放)执行。
 
 比较 R2R 开关前后的产物大小与启动耗时，并分开测首次解包、冷启动和热启动；不要无条件丢弃第一次运行，它可能正是需要优化的用户场景。热启动对照先稳定缓存状态，冷启动则控制相同条件。
 
@@ -394,7 +388,7 @@ FrameworkElement.LanguageProperty.OverrideMetadata(
 
 ## XAML 写错了却一路带到发版
 
-WPF 的 XAML 是懒加载的，某个窗口的 XAML 写错，只要不打开那个窗口就不会报错。给每个应用加一个 `--smoke` 开关：构造并布局每一个窗口，然后退出，放进 CI 跑。`--smoke` 的实现、CI 判定和放置位置（单实例互斥锁之前），见 `dev-switches.md`。
+编译成功没有覆盖所有窗口的懒加载 XAML；按 [smoke 实现及 CI 判定](dev-switches.md#--smokeci-里防-xaml-错误带到发版)逐窗构造与布局。
 
 ## 整个桌面点不动，只有杀掉桌面窗口管理器才恢复
 
@@ -489,15 +483,7 @@ OLE `CF_HDROP` 拖出需要本地路径，内存或 Blob 内容必须先物化�
 
 症状：应用各窗口在运行时任务栏显示正常、窗口左上角图标也对，但是在 Windows 资源管理器右键扩展菜单项（Shell Context Menu，如「加入暂存」）、发送到菜单（SendTo）、或者未固定的外部快捷方式上，却显示为 Windows 默认的通用白纸程序图标。
 
-根因：Windows Explorer 读取外壳关联命令图标（注册表语法通常为 `Xxx.exe,0` 或直接引用 EXE 路径）时，查找的是 Win32 PE 头资源表里的原生 `RT_GROUP_ICON`（ID 1）。若在 `.csproj` 中漏配了 `<ApplicationIcon>`，即使在 XAML 里通过 pack URI 注入了窗口图标，.NET 编译出的 PE 文件原生资源表仍为空。
-
-改法：在主 App 的 `.csproj` 的根 `<PropertyGroup>` 里显式加入：
-
-```xml
-<ApplicationIcon>Resources\app.ico</ApplicationIcon>
-```
-
-并在 Inno Setup 脚本的 `[Setup]` 段声明 `SetupIconFile=app.ico`（Inno 6.0+ 起弃用 `UninstallIconFile`），确保安装包和外壳注册全部指向真实 PE 图标。
+Explorer 读取 EXE 的 Win32 PE 图标，XAML 窗口 Icon 不会补上该资源。配置及验证统一见[应用原生图标](project-setup.md#应用原生图标)，安装器图标见 [Inno 配置](project-setup.md#inno-setup-6-最佳实践配置要点)；同时核对 Shell 注册的实际图标路径。
 
 ## WindowChrome 自定义标题栏上的按钮点不动（命中测试被吃掉）
 
@@ -585,11 +571,7 @@ RegisterHotKey(hwnd, id, modifiers | MOD_NOREPEAT, vk);
 
 ## 切换开机启动方式后，设置和系统实际状态不一致
 
-普通托盘应用使用当前用户权限启动。需要管理员权限的单次操作在用户主动触发时请求提升。特别留意安装位置：本技能的免 UAC 安装与便携包通常放在用户可写目录，不能让高权限任务长期运行其中可被替换的程序。
-
-排查已有企业部署时，确认实际登录用户、任务主体、可执行文件权限和触发条件。`HighestAvailable` 取决于任务账户本身拥有的权限。计划任务还要检查电池供电与执行时限对常驻应用的影响。[Microsoft Task Scheduler 权限上下文](https://learn.microsoft.com/windows/win32/taskschd/security-contexts-for-running-tasks)
-
-设置页应区分**已应用、用户取消、失败**。UAC 取消可由 Win32 错误码 1223 识别，访问被拒绝可由 COM HRESULT 判断。向用户报告具体结果，回读系统状态后再保存设置；新方式成功前保留能工作的原启动项。对于单文件发布，用 `Environment.ProcessPath` 核对当前可执行文件。用测试替身覆盖取消和失败分支，普通测试期间不写登录配置。
+本应用普通／管理员自启切换，统一按 [注册交互式管理员任务](startup.md#注册交互式管理员任务) 检查事务、系统回读、取消与回滚；模板结果映射见 [接入步骤](startup-template.md#接入步骤)。
 
 接管外部启动项到自己的启动清单时，先确认清单真正保存成功，再禁用原项；`void Save()` 返回并不能证明落盘成功。禁用失败时撤销本次新增或启用变更，保存回滚结果；回滚保存也失败时如实报告。按启动类型、目标、参数和工作目录判断等价，避免把同一程序的不同启动方式吞成一条。
 
@@ -628,3 +610,15 @@ RegisterHotKey(hwnd, id, modifiers | MOD_NOREPEAT, vk);
 在同卷唯一暂存目录内完成下载、校验与提取，确认预期 exe 后再移动到最终目录。既有缓存需要完成标记及内容核验；本地摘要能检查意外损坏，不能代替可信来源验证。替换无效旧缓存时保留恢复路径，失败后清理本次暂存目录。进程内并发用互斥保护；它不覆盖多进程竞争，先核对应用的单实例边界。
 
 用 HTTP 替身与临时目录覆盖中断缓存、篡改、提取失败后的重试、并发调用及不同阶段的 404。不要在测试中执行下载内容，或覆盖用户正在运行的 exe。
+
+## 安装后应用名称在系统列表中带有「version xx」
+
+检查 Inno Setup 是否缺少 `UninstallDisplayName`；配置只保留在 [Inno 要点](project-setup.md#inno-setup-6-最佳实践配置要点)，修改后核对系统应用列表中的实际名称。
+
+## 普通权限主进程中检测管理员身份永远返回 False（UAC 分割令牌）
+
+设置页在弹出 UAC 前就认定本地管理员是标准用户：先区分账户资格与当前进程权限。令牌判断及模板复用入口见 [账户资格与当前权限](startup.md#账户资格与当前权限)。
+
+## 开机提权自启错误拦截非 Program Files 路径（将推荐部署误当成平台硬性要求）
+
+便携／自定义目录被 `StartsWith(ProgramFiles)` 或 ACL 前置校验拒绝，且尚未调用任务 API：按 [路径策略](startup.md#选择权限与部署方式) 核对产品约束与提示文案。

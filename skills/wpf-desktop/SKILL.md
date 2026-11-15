@@ -1,15 +1,17 @@
 ---
 name: wpf-desktop
-description: Build, maintain or audit Windows WPF/XAML apps, including windows, DPI, tray, SDK/NuGet and packaging. Windows WPF 新建、维护与只读评估；新建或整体升级对齐 .NET 10，局部修复检查受影响路径。SDK/TFM-only audits can use desktop-app-standard --dotnet.
+description: Build, maintain or audit Windows WPF/XAML apps, including windows, DPI, tray, SDK/NuGet and packaging. Windows WPF 新建、维护与只读评估；新建或整体升级对齐 .NET 10，局部修复也检查已采用的建议依赖升级。SDK/TFM-only audits can use desktop-app-standard --dotnet.
 
 metadata:
-  version: "1.3.13"
+  version: "1.3.21"
   openclaw:
     homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/wpf-desktop
     emoji: "🪟"
     os: ["win32"]
     files:
       - project-setup.md
+      - startup.md
+      - startup-template.md
       - upgrade-dependencies.md
       - pitfalls.md
       - dev-switches.md
@@ -17,32 +19,36 @@ metadata:
       - templates/ci.yml
       - templates/package-release.ps1.txt
       - templates/UpdatePackage.cs
+      - templates/ElevatedStartup.cs
+      - templates/ElevatedStartup.Tests/ElevatedStartup.Tests.csproj.txt
+      - templates/ElevatedStartup.Tests/Program.cs
+      - templates/test-startup.ps1.txt
 ---
 
 # WPF desktop apps
 
-Start with the WPF project, its effective SDK and target framework, and the user-visible behavior involved. Check for relevant upgrades and optimization opportunities on each task. Follow the user's version, platform, component and read-only constraints.
+Start with the WPF project, its effective SDK and target framework, and the user-visible behavior involved. Follow the user's version, platform, component and read-only constraints.
 
 ## Choose the scope
 
 | Request | Action and verification |
 | --- | --- |
-| Skill and repository only, or general maintenance | Review the solution's SDK, NuGet packages, startup path, window and tray lifecycle, DPI handling, publish profiles and CI. Apply compatible stable NuGet patch/minor updates as described below. Use existing smoke checks or a targeted probe to confirm issues. Fix gaps with demonstrated impact and a way to verify the result. Report blocked or deferred upgrades with the reason. |
-| New app, whole-project upgrade or adoption of the full standard | For a new app, select the needed libraries and profiles in [项目起手与发布配置](project-setup.md). Target `net10.0-windows` and the latest stable 10.0 SDK. Apply [依赖升级](upgrade-dependencies.md) across the solution, profiles and CI. Restore, build and test, then exercise the affected windows and publish profiles on Windows. |
-| Feature or specific fault | Inspect the affected code and package versions. Apply compatible stable patch/minor updates to dependencies already involved in the task; keep unrelated dependency sweeps out of a focused fix. For a misplaced window, check monitor coordinates and DPI conversion, then reopen it on the affected monitor at the same scaling. |
+| Skill and repository only, or general maintenance | Review SDK, NuGet packages, startup, window/tray lifecycle, DPI, publish profiles and CI. Apply the startup and delivery checks below. Confirm gaps with existing smoke checks or targeted probes, then fix those with demonstrated impact and a way to verify the result. |
+| New app, whole-project upgrade or adoption of the full standard | Use [项目起手与发布配置](project-setup.md) for component choices, project structure, SDK/test configuration, publish profiles and the distribution matrix. Apply upgrades across the solution, tools and CI. |
+| Feature or specific fault | Follow the affected code and required companion changes; verify the feature/fix and any dependency changes. Use the diagnostic guide below for symptom-specific checks. |
 | Read-only assessment or plan | Inspect project files, existing results and configured feeds. Report findings, evidence and proposed checks, preserving the working tree. If available, use `desktop-app-standard`'s `audit.mjs <repo> --dotnet` for static SDK, TFM and CI checks. |
 
-Compatible patch/minor updates and their authorization, compatibility and verification rules are defined in [依赖升级](upgrade-dependencies.md). Apply them within the chosen scope; SDK/TFM and major migrations are evaluated separately.
+Every task follows [依赖升级](upgrade-dependencies.md): check all adopted recommended dependencies, including `xunit.v3`, and upgrade versions below their selected targets in write-enabled tasks, including focused fixes. That guide owns version selection, required major migrations, other dependency scope and blocker reporting. Add absent components only when needed; user version constraints and read-only scope take precedence.
+
+## Default logon-startup maintenance check
+
+For new apps and general maintenance, read [自启部署与排查](startup.md) and assess plain startup, resident administrator startup and occasional UAC needs. Implement applicable missing controls, registration, repair, removal and state/error feedback within the authorized scope; preserve read-only and product constraints. Keep startup opt-in and support portable paths as the guide specifies.
+
+Adapt existing registration code first. When adopting or changing [ElevatedStartup.cs](templates/ElevatedStartup.cs), read [模板接入与隔离测试](startup-template.md) for entry-point dispatch, API results, configuration and the isolated runner. Ordinary tests use substitutes; real UAC and logon checks use an isolated integration environment.
 
 ## CI and release adoption
 
-For new apps and general maintenance, identify the distribution channel and report both PR checks and tag delivery. For GitHub Releases, adapt [templates/ci.yml](templates/ci.yml) using [the release guide](github-actions.md). The Windows test job gates publish profiles and packaging; softprops/action-gh-release publishes the explicit asset list directly with draft: false and fail_on_unmatched_files enabled after local package and checksum verification. Approval, drafts and provenance are configured when required by the project.
-
-Use the existing solution and test runner. For new apps, general maintenance and full-standard adoption, align profiles and packaging with the recommended distribution matrix: an installer plus x64/ARM64 self-contained and framework-dependent ZIPs. Fill missing package types and architectures; an incomplete historical release does not define the target matrix. Preserve explicit current user constraints and verify platform compatibility. Avoid attaching the same executable again when it is already distributed in a ZIP. The template uses .NET 10 MTP and stable tags. For VSTest, preserve the repository's test invocation and confirm a nonzero discovered test count. For stores, internal delivery or manual publication, record the actual delivery path. Trace reusable workflows to their implementation and source revision. Focused fixes check the affected paths; read-only assessments provide findings and proposed changes.
-
-Inspect the downloaded package from a clean directory, including external resources and native libraries. Run the unpacked app on each supported architecture when available, record ARM64 cross-build and device execution separately, and verify installed N→N+1 upgrades preserve user data. Include the release run, selected package, signing status and remaining device checks in the result.
-
-Copy [package-release.ps1](templates/package-release.ps1.txt) to tools and call that same script locally and from CI. It checks the four PE architectures, required external files, configured signatures, complete ZIP contents and isolated unpacked x64 smoke, then hashes the explicit asset list. Adapt application-specific smoke switches and required files. For download-based updates, use [UpdatePackage.cs](templates/UpdatePackage.cs) for process-architecture selection and architecture-isolated caching; verify SHA256 before extracting and mark completion only after successful extraction. Preserve offline/manual-update applications without introducing networking.
+For new apps, general maintenance and full-standard adoption, check the [distribution matrix](project-setup.md#发布包组织三轨分发矩阵安装包--便携-zip--框架依赖精简版) and identify the actual delivery channel. For GitHub Releases, follow [发布工作流](github-actions.md) to adapt the CI and shared packaging script, validate assets and inspect PR/tag runs. That guide also covers signing, winget, update integration and upgrade/uninstall checks. For stores, internal delivery or manual publication, record the corresponding path. Public publication and external service configuration follow the user's requested scope.
 
 ## Find a diagnostic or release guide
 
@@ -51,15 +57,19 @@ Copy [package-release.ps1](templates/package-release.ps1.txt) to tools and call 
 | White flash, slow startup, focus, multi-monitor placement, buttons off screen, RTL text, shell icons or hotkeys | [按症状查 WPF 故障](pitfalls.md). Search its headings, e.g. 「副屏上窗口位置算错」 or 「德语界面上控件被挤没」. |
 | Stale lists, blocking filters, config recovery or update caching | [按症状查 WPF 故障](pitfalls.md), e.g. 「后台扫描完成了，筛选列表仍然卡顿」. |
 | Lazy-loaded XAML, WPF test hosts, layout screenshots, phase timing, intermittent activation or translation coverage | [开发期自查工具](dev-switches.md). Use the probe that exposes the symptom. |
+| Administrator logon startup, account/path rejection, single-file task paths or stale startup settings | [自启部署与排查](startup.md). For template adoption or changes, continue to [模板接入与隔离测试](startup-template.md). |
 | Elevated helper has no usable confirmation, RunAs uses the wrong data directory, or a retry changes its approved scope | [按症状查 WPF 故障](pitfalls.md)「提权重试进程在跑，却没有可操作的确认框」. For real consent, Explorer drag/drop or crash-recovery evidence, read [开发期自查工具](dev-switches.md)「人工交互验收」. |
-| GitHub Actions, installer and portable ZIPs, checksums, signing, direct release publication or winget | [发布工作流](github-actions.md). Match the asset list to the selected profiles and installer. |
+| Component choices, SDK/test configuration, profiles, installer or EXE icon | [项目起手与发布配置](project-setup.md). |
+| GitHub Actions, packaging, checksums, signing, publication, winget or download updates | [发布工作流](github-actions.md). |
 
 ## Verify the result
 
-- **XAML or tray lifecycle.** Build on the project SDK. On Windows, use the existing `--smoke` harness or open the affected windows, close and reopen them. Check that each window actually lays out to nonzero size and that closing a test window leaves the harness running.
-- **Layout or DPI.** Exercise the affected state with long or RTL strings on the smallest supported work area. For example, 1366×768 at 150% with a 48-DIP taskbar leaves about 464 DIP vertically. Compare action-button screen bounds with that monitor’s work area.
-- **Startup or intermittent failures.** Time individual phases or count successes over repeated trials under the same conditions before and after the change. Report counts and the environment.
-- **Release.** Use an English-only installer and uninstaller UI, including custom pages, buttons and messages, regardless of the OS or app language; configure Inno Setup as shown in [项目起手与发布配置](project-setup.md). Check both wizards on a Chinese-language Windows system. Build the selected profiles, verify the downloaded release files against the expected asset set and hashes, and record which architectures actually ran. Public release, signing-service configuration and winget submission follow the user’s requested scope.
-- **GitHub Actions.** Follow the application's existing tag workflow through its Windows build, signing, packaging, package verification and direct publication steps. For an existing release, inspect the run for the tag and match the published assets to that build. Report which steps ran locally and which succeeded on hosted runners.
-- **Dependency upgrade.** Report the required major, effective SDK and TFMs, resolved package versions before and after, and the Windows checks run. Record any unmet target with its concrete blocker and retry condition.
+Apply the checks relevant to the selected scope, including required dependency changes. Read-only assessments use existing results and report proposed checks; they do not run restore, build, tests, registration or publication that could change project or system state.
+
+- **Build and tests.** Restore and build with the effective SDK; use the repository's runner and [test-result checks](dev-switches.md#测试运行与结果判定). On Windows, exercise affected windows and tray lifecycle, including close/reopen. Use the [smoke harness](dev-switches.md#--smokeci-里防-xaml-错误带到发版) when available.
+- **Layout or DPI.** Use [layout acceptance checks](dev-switches.md#截图的盲区) on the affected monitor and state; screenshots alone do not prove controls are reachable.
+- **Startup or intermittent failures.** Use the [timing probe](dev-switches.md#分段计时探针定位启动耗时) or [repeated trials](dev-switches.md#间歇性问题跑-n-轮记比分), and report comparable results.
+- **Logon startup.** Report the need, changes or reason not applicable, and the evidence level from [自启验收](startup.md#验证结果). Template changes also run the [isolated tests](startup-template.md#隔离验证).
+- **Delivery.** Follow [产物验证](github-actions.md#产物验证) and the relevant installer/update checks; distinguish local checks, hosted runs and actual device execution.
+- **Dependency upgrade.** Include the [upgrade verification record](upgrade-dependencies.md#验证与交付记录).
 - **Report.** State what you checked, what you found, what you changed and how you verified it. Include comparable measurements for performance claims and identify checks that still need a device, runner or published build.

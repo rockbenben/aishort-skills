@@ -1,6 +1,6 @@
 # 开发期自查工具：常驻开关与临时探针
 
-WPF 应用有两类问题特别难查：**看不出对错的**（多语言 / 多分辨率 / 深浅主题下的布局）和**间歇性的**（抢前台、竞态）。靠手点复现不了，得让程序自己交代。
+这里集中维护 smoke、布局与交互验收、临时探针和测试结果判定；具体故障改法见 [pitfalls.md](pitfalls.md)。
 
 已有的自查开关挂在 `OnStartup` 里、**且放在单实例互斥体检查之前**，这样托盘里正在用的实例照常工作，检查进程自己开自己关，互不干扰。探针则是临时的：量完就删，不进主干。
 
@@ -11,8 +11,7 @@ protected override void OnStartup(StartupEventArgs e)
     if (e.Args.Contains("--smoke") || e.Args.Contains("--shots"))
     {
         ShutdownMode = ShutdownMode.OnExplicitShutdown; // 关闭第一扇测试窗口后仍能布局下一扇
-        // 别在 OnStartup 里当场跑：BeginInvoke 到 ApplicationIdle，等消息循环转起来再执行。
-        // 等 Dispatcher 可处理布局后再执行，避免把未初始化的窗口当作验证结果。
+        // 等消息循环可处理布局后再执行，避免验证未初始化的窗口。
         Dispatcher.BeginInvoke(() =>
         {
             if (e.Args.Contains("--shots")) RunShots(e.Args); else RunSmoke();
@@ -107,26 +106,26 @@ void Shot(string name, Func<Window> make, Action<Window>? tweak = null)
 
 示例按工作区高度渲染指定窗口；主题和语言由调用方设置。
 
-**这套东西真正的价值在于逼出你想不到的组合**：德语最窄宽度下提示条被切成半个词、阿拉伯语下标题从开头被截断，这些在中文加常用尺寸下一次都遇不到。
-
 ### 截图的盲区
 
-- harness 无条件设置 `w.MaxHeight` 会掩盖应用缺少运行时封顶的问题。另走正常开窗路径，验证显示器探测成功与失败时的上限，并检查主按钮的屏幕边界。
-- `RenderTargetBitmap` / `PrintWindow` 能画出屏外内容；PNG 中按钮完整不代表用户点得到。将按钮屏幕 rect 与所在显示器的 `rcWork` 比较。
-- 条件性字段由数据分支决定，窗口 × 语言 × 尺寸 × 主题矩阵不保证覆盖。为受影响分支造状态；结构检查可补充发现无限宽测量等问题，不以截图总数判断覆盖。
+布局与 DPI 验收使用产品支持的最小工作区、混合缩放副屏、长译文与 RTL、深浅主题，并构造受影响的条件性字段状态；切换显示器或窗口形态后复验。
 
-布局修法见 `pitfalls.md`「对话框在小屏上，确定按钮跑到任务栏底下」和「德语界面上控件被挤没」。源码扫描只是线索，不以特定函数名代替布局验证。
+- harness 设置 `w.MaxHeight` 会掩盖应用缺少运行时封顶的问题。另走正常开窗路径，覆盖显示器探测成功与失败。
+- `RenderTargetBitmap` / `PrintWindow` 能画出屏外内容；PNG 完整不证明可点击。将主按钮的屏幕 rect 与所在显示器的 `rcWork` 比较，确认标题栏和操作区可达。
+- 源码扫描只是线索，需结合绑定、祖先约束与实际布局，不能只匹配辅助函数名或按截图数量判断覆盖。
+
+布局修法见 [小屏对话框](pitfalls.md#对话框在小屏上确定按钮跑到任务栏底下)和[长译文控件](pitfalls.md#德语界面上控件被挤没)。
 
 ### harness 初始化与副作用
 
 - 样例配置先完成正常启动需要的归一化，例如将跟随系统语言解析成具体 locale。构造/Loaded 中的 `SelectionChanged`、`Checked` 等事件不能把初始化误当成用户操作，触发写盘、重启或弹窗。
-- `Application`/Dispatcher 关闭后窗口可能零尺寸且无异常。需要时用 `Dispatcher.ShutdownStarted` 记录关闭来源，见 `pitfalls.md`「应用突然消失」。
+- 意外关闭的诊断见 [应用突然消失](pitfalls.md#应用突然消失没留下任何日志)；窗口布局结果统一按 smoke 断言。
 - `OverrideMetadata` 同一类型与属性只能调用一次；逐语言截图改设每个窗口的 `FlowDirection`，不要在循环里重复覆写元数据。[DependencyProperty.OverrideMetadata](https://learn.microsoft.com/dotnet/api/system.windows.dependencyproperty.overridemetadata)
 - 全屏覆盖窗、热键与输入钩子会影响真实桌面。harness 默认跳过不相关的系统集成；必须验证时使用隔离模式，并沿用相应窗口创建前的初始化。ghost window 边界见 `pitfalls.md` 对应小节。
 
 ## 分段计时探针：定位启动耗时
 
-临时加，量完就删。别猜哪里慢。
+在需要区分耗时的启动阶段之间临时打点：
 
 ```csharp
 private static readonly Stopwatch _sw = Stopwatch.StartNew();
@@ -153,9 +152,7 @@ ReleaseDC(IntPtr.Zero, dc);
 
 ## 从外部驱动 UI 做验证
 
-从外部定位窗口时，`System.Windows.Automation`（UIA）不一定看得见模态对话框：我在一个应用上试了四次，`AutomationElement.RootElement.FindAll(TreeScope.Children, …)` 始终只列出主窗口，而那个对话框明明就在屏幕上。
-
-别在 UIA 上耗时间，直接用 `EnumWindows` 按进程 ID 加标题捞：
+UIA 未列出可见模态窗口时，改用 `EnumWindows` 按进程 ID、可见性和标题定位：
 
 ```csharp
 EnumWindows((h, _) => {
@@ -167,7 +164,7 @@ EnumWindows((h, _) => {
 
 配套两条：窗口没显示时 `Process.MainWindowHandle` 是 0（托盘应用常态如此），所以别拿它当入口；窗口矩形用 `DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)` 而不是 `GetWindowRect`，后者在 DWM 下会多出一圈不可见的边框阴影。
 
-UIA 仍然是选控件、点按钮的好工具（`InvokePattern` / `SelectionItemPattern` / `ExpandCollapsePattern` 都好用），只是**找窗口这一步**别指望它。另外按名字找控件时要按 `ControlType` 过滤——`FindFirst(NameProperty, "类型")` 很可能命中的是那个标签 `TextBlock` 而不是它旁边的 `ComboBox`，然后报「不支持的模式」。还有一个静默坑：`AutomationId` 写在 `Border` 这类没有默认 automation peer 的元素上，UIA 树里根本不会出现——`AutomationId` 自己不会创建 peer。
+窗口找到后，可用 UIA 的 `InvokePattern`／`SelectionItemPattern`／`ExpandCollapsePattern` 操作控件。按名字查询同时过滤 `ControlType`，避免将标签 TextBlock 当成 ComboBox；`AutomationId` 不会为没有默认 automation peer 的 Border 等元素创建 peer。
 
 ## 人工交互验收：确认框、Explorer 拖放与恢复
 
@@ -195,6 +192,26 @@ UIA 仍然是选控件、点按钮的好工具（`InvokePattern` / `SelectionIte
 
 验证实际行为与清理结果，不用“源码中出现某个构造参数”替代功能验证。
 
+## 测试运行与结果判定
+
+沿用项目测试框架和 runner，版本迁移按[依赖升级](upgrade-dependencies.md)适配。命令退出 0 不足以证明实际运行了测试：
+
+| 模式 | 命令与配置 |
+| --- | --- |
+| .NET 10 MTP | 按[项目配置](project-setup.md#sdk-固定globaljson-一处说了算)选择 MTP，再运行 `dotnet test --project tests/Xxx.Core.Tests -c Release --minimum-expected-tests 1`；下限改为该项目实际预期数量。 |
+| VSTest | 保留项目原调用，输出 TRX 并检查实际测试数；多目标项目各用独立结果路径并汇总全部目标。 |
+
+VSTest 示例：
+
+```powershell
+dotnet test tests/Xxx.Core.Tests -c Release --logger "trx;LogFileName=results.trx"
+if ($LASTEXITCODE) { exit $LASTEXITCODE }
+[xml]$result = Get-Content tests/Xxx.Core.Tests/TestResults/results.trx
+if ([int]$result.TestRun.ResultSummary.Counters.total -lt 1) { throw 'No tests discovered' }
+```
+
+检查运行是否完整结束及错误／跳过原因；宿主初始化失败可能使部分测试未执行，即使失败数为零也不能判绿。需要前台的真实发键测试抢不到前台时记为跳过；窗口构造或离屏截图不替代接收端验证。
+
 ## WPF 回归测试：STA、Application 与入口程序集资源
 
 需要实例化窗口的测试不能只在任意测试线程上 `new Window()`。在 STA 线程上建立宿主，并保持 Dispatcher 消息循环存活；通过它调度构造、交互和关闭。多个测试类共享同一个 `Application` fixture，同一 AppDomain 内不要为每个测试类重建 Application。临时线程退出后仍留下的 `Application.Current` 会指向已失效的 Dispatcher。
@@ -202,8 +219,6 @@ UIA 仍然是选控件、点按钮的好工具（`InvokePattern` / `SelectionIte
 若 XAML 在测试里报图标或字典资源找不到，而应用内正常，先检查相对 pack URI 的解析程序集。测试入口程序集与应用程序集不同；可使用明确的 `/Assembly;component/...` 引用，或在测试项目以相同资源路径链接已有资源。不要生成另一份图标掩盖路径问题，也不要为了加载资源启动完整生产 App 的自启、钩子与配置流程。
 
 测试编辑器要走真实保存路径，再把结果写到隔离文件并重读。复制、嵌套排序等变更同时验证结构关系和执行轨迹，单纯断言列表长度看不出父引用错位。共享模型被另一个入口修改时，还要检查已经构造的行 ViewModel 是否更新。
-
-宿主初始化异常可能记为运行错误，导致部分测试未执行，即使失败数为零也不能判绿。查看运行是否完整结束、错误与跳过原因，并在需要时用 TRX 确认执行数量。需要前台的真实发键检查抢不到前台时记录为跳过；窗口构造或离屏截图通过不能替代接收端验证。
 
 ## 多语言资源：检查承诺完整翻译的语种
 
@@ -225,4 +240,4 @@ foreach (var culture in supportedCultures)
 }
 ```
 
-案例中的 18 语种另有已废弃术语表，可用它检查翻译值。使用项目实际维护的词表，并为用户可见错误消息与内部诊断分别约定用语。
+项目有已废弃术语表时，用它检查翻译值；用户可见错误与内部诊断分别约定用语。
