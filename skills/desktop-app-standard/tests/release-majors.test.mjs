@@ -8,7 +8,9 @@ import path from 'node:path';
 // Execute the version checks shipped in the app workflows against package-manager output.
 function runGate(stack, targets, dependencies, cargoTree) {
   const workflow = fs.readFileSync(new URL(`../templates/workflows/release-${stack}.yml`, import.meta.url), 'utf8');
-  const script = workflow.match(/node <<'NODE'\r?\n([\s\S]*?)\r?\n +NODE\b/)[1];
+  const script = [...workflow.matchAll(/node <<'NODE'\r?\n([\s\S]*?)\r?\n +NODE\b/g)]
+    .map(match => match[1]).find(source => source.includes('desktop-version-targets.json'));
+  assert.ok(script, 'workflow must check installed dependencies against its target table');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-release-'));
   const write = (file, data) => fs.writeFileSync(path.join(root, file), JSON.stringify(data));
   try {

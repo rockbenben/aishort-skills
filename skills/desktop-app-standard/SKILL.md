@@ -3,7 +3,7 @@ name: desktop-app-standard
 description: Build, maintain or audit Tauri/Electron desktop apps, including dependencies, packaging, updates and CI. Next.js shell migration uses the corresponding nextjs-to-tauri or nextjs-to-electron Skill. 支持只读巡检，以及明确请求的 .NET SDK/TFM 静态审计；局部修复也检查已采用的建议依赖升级。
 
 metadata:
-  version: "0.9.19"
+  version: "0.9.20"
   openclaw:
     homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/desktop-app-standard
     emoji: "📐"
@@ -67,13 +67,13 @@ Tauri/Electron 每次任务都按[建议依赖升级规则](references/upgrade-d
 
 | 应用 | 推荐入口 | 构建与发布责任 |
 | --- | --- | --- |
-| Tauri | [release-tauri.yml](templates/workflows/release-tauri.yml) | 官方 tauri-apps/tauri-action 使用 releaseDraft: false 直接发布，矩阵完成后核对 updater 平台覆盖并附加摘要。 |
+| Tauri | [release-tauri.yml](templates/workflows/release-tauri.yml) | 官方 tauri-apps/tauri-action 使用 releaseDraft: true 暂存全部平台，核对 updater 覆盖和摘要后自动公开。 |
 | Electron builder/updater | [release-electron.yml](templates/workflows/release-electron.yml) | 平台构建显式 --publish never；单一 publish 检查本地更新清单和摘要后用 softprops/action-gh-release 直接公开。示例只接受稳定版，beta 项目按真实 channel 生成和校验清单。 |
 | PR 检查 | [ci.yml](templates/workflows/ci.yml) | 使用实际应用工作目录、锁文件和 scripts；覆盖承诺的平台及受影响的打包运行路径。 |
 
-复制和改造按[模板适配步骤](references/bootstrap.md#适配已有应用的-workflow)，实际交付与重跑按[发布流程](references/release-flow.md)。默认直接发布；审批、草稿、provenance 与额外证据按项目要求配置。reusable workflow 追到被调用文件和固定版本核实，大型项目参考见[工作流实例](references/workflow-examples.md)。
+复制和改造按[模板适配步骤](references/bootstrap.md#适配已有应用的-workflow)，实际交付与重跑按[发布流程](references/release-flow.md)。默认自动发布；Tauri 草稿仅用于构建暂存，校验后自动公开，不增加人工审批。provenance 与额外证据按项目要求配置。reusable workflow 追到被调用文件和固定版本核实，大型项目参考见[工作流实例](references/workflow-examples.md)。
 
-默认 Tauri 模板调用 release-assets.mjs 的 verify-release，检查公开资产归属、六平台 feed、签名对应和真实 SHA256；Electron 在 tag 校验中调用 delivery-checks.mjs 检查有效 NSIS 英文配置。随模板复制所声明脚本，按[适配清单](templates/release-plan.md)核对外置文件、缓存架构、实际更新方式与中央 winget 完整资产门禁。audit.mjs 也输出已知源码分发陷阱，静态候选需结合实际入口验证。
+默认 Tauri 模板调用 release-assets.mjs 的 verify-draft，在公开前检查资产归属、六平台 feed、签名对应和真实 SHA256；Electron 在 tag 校验中调用 delivery-checks.mjs 检查有效 NSIS 英文配置。随模板复制所声明脚本，按[适配清单](templates/release-plan.md)核对外置文件、缓存架构、实际更新方式与中央 winget 完整资产门禁。audit.mjs 也输出已知源码分发陷阱，静态候选需结合实际入口验证。
 
 ## 运行审计
 

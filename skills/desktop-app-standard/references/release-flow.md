@@ -1,6 +1,6 @@
 # CI 与直接发布
 
-默认在 tag 校验和测试通过后直接公开 Release。Tauri 使用官方 Action，Electron 与 WPF 使用 softprops/action-gh-release 的 draft: false。按应用适配工作目录、命令和产物。参考项目的具体做法见[大型项目工作流](workflow-examples.md)。
+默认在 tag 校验、测试和资产校验通过后自动公开 Release。Tauri 使用官方 Action 暂存草稿，完成矩阵与校验后自动公开，Electron 与 WPF 使用 softprops/action-gh-release 的 draft: false。按应用适配工作目录、命令和产物。参考项目的具体做法见[大型项目工作流](workflow-examples.md)。
 
 ## 日常 CI
 
@@ -10,17 +10,17 @@ PR 在只读权限下运行锁文件安装、项目已有的 lint/typecheck/test
 
 | 栈 | 模板与发布方式 |
 | --- | --- |
-| Tauri | [release-tauri.yml](../templates/workflows/release-tauri.yml) 校验 tag、配置版本与依赖后，矩阵使用 tauri-apps/tauri-action，releaseDraft: false，上传安装包、签名和 latest.json。最后核对平台覆盖并附加 SHA256SUMS。 |
+| Tauri | [release-tauri.yml](../templates/workflows/release-tauri.yml) 校验 tag、配置版本与依赖后，矩阵使用 tauri-apps/tauri-action，releaseDraft: true，暂存安装包、签名和 latest.json。verify 核对平台覆盖并附加 SHA256SUMS 后自动公开。 |
 | Electron | [release-electron.yml](../templates/workflows/release-electron.yml) 校验后按 OS 构建 artifacts，electron-builder --publish never；单一 publish 下载全部本轮 artifacts，在本地验证清单和 SHA-512、生成 SHA256SUMS，再调用 Release Action 直接发布。 |
 | WPF | wpf-desktop 的 templates/ci.yml 用 test → release；生成所选 profile、签名、安装器及完整 ZIP，运行解包 smoke，再直接发布明确的文件列表。 |
 
-Tauri 官方 Action 合并同一个 latest.json，模板串行执行这些写入者。Release 从首个矩阵目标完成时公开，随后平台依次补齐，最终 verify 成功代表全部目标完成。需要全部目标先构建完再公开的项目，可采用独立 artifacts 与单一发布器，并用项目已有的 feed 生成工具汇总。按当前请求，默认直接发布。
+Tauri 官方 Action 合并同一个 latest.json，模板串行执行这些写入者。首个矩阵目标创建草稿，后续目标补齐资产；verify 检查全部目标、签名和摘要后自动公开。构建或校验失败时保留草稿，不向更新客户端暴露不完整版本。
 
 ## 版本与重跑
 
 - tag vX.Y.Z 对应应用版本；Electron 默认模板接受稳定版。发布前同步 package.json，Tauri 配置引用该版本；WPF 从 tag 注入 publish。依赖目标表随 workflow 入库，校验实际解析版本。手动重跑选择对应 tag ref，构建检出已验证的 commit。
 - softprops 使用 make_latest: legacy，按 GitHub 的版本规则判断 latest。Tauri 沿用官方 Action 的发布逻辑。预发布通过各自 channel 测试，普通用户的稳定 endpoint 仍需验证。
-- 同一 tag 的重跑复用已有 Release，上传同名文件按 Action 的覆盖行为处理。签名和打包完成后再计算摘要，检查本次文件集合；公开后的不兼容修复通常发布新版本。
+- Tauri 同一 tag 重跑只允许复用未公开草稿；已公开时拒绝覆盖，修复使用新版本。其他发布器上传同名文件按 Action 的覆盖行为处理。签名和打包完成后再计算摘要，检查本次文件集合；公开后的不兼容修复通常发布新版本。
 - 仓库已开启 immutable releases 时按 GitHub 的资产不可变限制及所用 Action 的支持情况适配。审批、provenance、SBOM、严格构建证据等按用户或仓库要求添加。
 
 ## 自动更新与签名

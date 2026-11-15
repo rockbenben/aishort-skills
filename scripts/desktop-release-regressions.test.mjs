@@ -9,17 +9,21 @@ import yaml from 'js-yaml';
 
 const workflow = yaml.load(fs.readFileSync('skills/wpf-desktop/templates/ci.yml', 'utf8'));
 
-test('default desktop workflows publish directly through gated release jobs', () => {
+test('default desktop workflows publish automatically through gated release jobs', () => {
   const tauri = yaml.load(fs.readFileSync('skills/desktop-app-standard/templates/workflows/release-tauri.yml', 'utf8'));
   const electron = yaml.load(fs.readFileSync('skills/desktop-app-standard/templates/workflows/release-electron.yml', 'utf8'));
-  for (const config of [tauri, electron, workflow]) {
+  for (const config of [electron, workflow]) {
     for (const job of Object.values(config.jobs)) {
       assert.equal(job.environment, undefined);
       assert.ok(!job.steps.some(step => step.with?.draft === true || step.with?.releaseDraft === true));
     }
   }
   assert.equal(tauri.jobs.build.needs, 'validate');
-  assert.equal(tauri.jobs.build.steps.find(step => step.uses?.startsWith('tauri-apps/tauri-action')).with.releaseDraft, false);
+  assert.equal(tauri.jobs.build.steps.find(step => step.uses?.startsWith('tauri-apps/tauri-action')).with.releaseDraft, true);
+  assert.deepEqual(tauri.jobs.verify.needs, ['validate', 'build']);
+  assert.match(tauri.jobs.verify.steps.at(-1).run, /gh release edit.*--draft=false/);
+  assert.ok(tauri.jobs.verify.steps.findIndex(step => step.run?.includes('verify-draft')) < tauri.jobs.verify.steps.length - 1);
+  assert.match(tauri.jobs.validate.steps.find(step => step.name?.startsWith('Refuse')).run, /!r.draft/);
   assert.deepEqual(electron.jobs.publish.needs, ['validate', 'build']);
   assert.equal(electron.jobs.publish.steps.at(-1).with.draft, false);
   assert.equal(workflow.jobs.release.needs, 'test');
@@ -28,9 +32,9 @@ test('default desktop workflows publish directly through gated release jobs', ()
 
 test('Tauri default workflow delegates complete feed and digest verification', () => {
   const tauri = yaml.load(fs.readFileSync('skills/desktop-app-standard/templates/workflows/release-tauri.yml', 'utf8'));
-  const step = tauri.jobs.verify.steps.find(step => step.run?.includes('verify-release'));
+  const step = tauri.jobs.verify.steps.find(step => step.run?.includes('verify-draft'));
   assert.match(step.run, /gh api.*release.json/);
-  assert.match(step.run, /release-assets.mjs verify-release/);
+  assert.match(step.run, /release-assets.mjs verify-draft/);
   assert.equal(tauri.jobs.verify.env.PLATFORMS.split(' ').length, 6);
 });
 

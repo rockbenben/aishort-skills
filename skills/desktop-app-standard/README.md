@@ -52,13 +52,13 @@ node --test tests/*.test.mjs
 |---|---|
 | [references/version-targets.json](references/version-targets.json) | 随 release 工作流复制到应用的 `.github/desktop-version-targets.json`，用于校验实际依赖 |
 | `workflows/ci.yml` | PR 检查，只读、无 secrets（Tauri 步骤按 `src-tauri/Cargo.toml` 自动跳过） |
-| `workflows/release-tauri.yml` | Tauri 六目标矩阵 + 官方 Action 直接发布 + 公开资产校验 |
+| `workflows/release-tauri.yml` | Tauri 六目标矩阵 + 官方 Action 暂存草稿 + 全部资产校验后自动公开 |
 | `workflows/release-electron.yml` | Electron 每 OS 一 job 双架构 + 单一直接发布 job |
 | `desktop-policy.example.json` | 仅存放审计读取的平台与偏离；默认做法见 [house style](references/house-style.md) |
 
 模板中的 Action 标签在采用时核对当前支持情况；模板默认 npm，存量 Yarn/pnpm 仓库按注释换安装行（漏改会报 `npm-ci-without-lockfile`）。模板的 Node major 是 bootstrap 起点，不是永久值：复制后跑 `audit.mjs --ci-only`，`node-version-*` 会指出它是否已落后于 LTS。首次使用前跑 `audit.mjs --ci-only`（.NET 项目用 `--dotnet`），并在真实仓库中跑一次完整发布与 N→N+1 更新。
 
-Tauri 默认模板使用官方 Action 直接发布，并调用 `release-assets.mjs verify-release` 核对公开资产、更新清单和摘要。采用模板时一并复制该脚本。脚本中的 `record` / `verify` 构建证据命令仅用于明确需要该验证的工作流。
+Tauri 默认模板使用官方 Action 暂存草稿，并调用 `release-assets.mjs verify-draft` 核对全部资产、更新清单和摘要后自动公开。采用模板时一并复制该脚本。脚本中的 `record` / `verify` 构建证据命令仅用于明确需要该验证的工作流。
 
 ## 从旧版升级
 

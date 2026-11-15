@@ -15,7 +15,7 @@
 |---|---|---|---|
 | P0 | `rust-cache-workspace` | rust-cache 的 `… -> …` 缓存了整个源码树而不只是 target；恢复时会用旧快照覆盖新 checkout。 | 改为 `./src-tauri -> target`（按实际 Cargo 工作区）。 |
 | P0 | `artifact-action-retired` | `…` 已退役，job 会以配置错误立即失败，看起来像工作流 bug。 | 升级到当前 major 并核验 v4+ 的同名产物不可覆盖语义。 |
-| P0 | `draft-never-published` | release 以草稿创建，但本工作流中没有发布草稿的步骤。updater 读的是 `releases/latest`，它忽略草稿：构建成功、没人收到更新。 | 默认使用 `draft: false` / `releaseDraft: false` 直接发布；项目明确采用草稿时配置公开步骤或记录人工发布约定。 |
+| P0 | `draft-never-published` | release 以草稿创建，但本工作流中没有发布草稿的步骤。updater 读的是 `releases/latest`，它忽略草稿：构建成功、没人收到更新。 | Electron/WPF 校验后直接发布；Tauri 暂存草稿时须配置校验后的自动公开步骤，人工发布仅在项目明确要求时采用。 |
 | P0 | `release-permissions` | 工作流创建/上传 release，但没有授予 `contents: write`；默认 token 只读，发布步骤会失败并可能留下半成品草稿。 | 仅在 stage/publish job 授予 `contents: write`，其余 job 保持 `contents: read`。 |
 | P0 | `tagname-from-ref-unasserted` | `tagName` 取自 `github.ref_name`，而安装包文件名和内嵌版本来自配置；两者不一致时，名为 v3.0.1 的 release 可能装着 3.0.0。`workflow_dispatch` 时 ref_name 还是分支名。 | 构建前把 tag 注入版本或断言 tag == manifest 版本，并限定 `github.ref_type == tag`。 |
 | P0 | `cache-lockfile-mismatch` | setup-node 配了 `cache: npm/yarn/pnpm`，仓库里却没有对应锁文件；job 会因找不到 cache-dependency-path 失败。 | 改为实际包管理器，或提交对应锁文件。 |

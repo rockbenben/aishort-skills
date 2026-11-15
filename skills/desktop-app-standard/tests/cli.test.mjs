@@ -215,6 +215,7 @@ test('documented platform deviation narrows coverage; undocumented one is report
     write(root, '.desktop-policy.json', { platforms: ['windows-x64'] });
     ids = JSON.parse(run('audit.mjs', [root, '--offline', '--json']).stdout).ciFindings.map(f => f.id);
     assert.ok(ids.includes('policy-deviation-undocumented'), 'a bare narrowed platforms array must be reported as drift');
+      assert.ok(ids.includes('platform-coverage'), 'an undocumented platform list must not suppress coverage checks');
   } finally { fs.rmSync(root, { recursive: true }); }
 });
 test('policy deviation naming a finding id accepts it (with reason + revisitWhen) and keeps it out of the P counts', () => {

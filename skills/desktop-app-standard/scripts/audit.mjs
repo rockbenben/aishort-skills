@@ -205,12 +205,12 @@ if (scan.files.includes('.desktop-policy.json')) {
   else if (dev) policyNotes.push({ id: 'policy-deviation-undocumented', severity: 'P2', file: '.desktop-policy.json', line: null, confidence: 'confirmed',
     detail: '`.desktop-policy.json` 缩小了平台范围，但缺少 reason 或 revisitWhen；按 house style 仍以 Windows/macOS/Linux 全平台为准。', fix: '补齐 reason 与 revisitWhen（日期或触发条件），或删除该偏离。' });
   else if (Array.isArray(pol?.platforms)) {
-    platforms = osOf(pol.platforms);
+    const requestedPlatforms = osOf(pol.platforms);
     report.policyPlatforms = pol.platforms;
-    const missing = ['windows', 'macos', 'linux'].filter(p => !platforms.includes(p));
+    const missing = ['windows', 'macos', 'linux'].filter(p => !requestedPlatforms.includes(p));
     if (missing.length)
       policyNotes.push({ id: 'policy-deviation-undocumented', severity: 'P2', file: '.desktop-policy.json', line: null, confidence: 'confirmed',
-        detail: `\`.desktop-policy.json\` 的 platforms 缩小到 ${platforms.join('/')}（缺少 ${missing.join('/')}），但没有 \`deviations\` 里带 reason/revisitWhen 的 platforms 条目；按 house style 这是未记录的漂移。`,
+        detail: `\`.desktop-policy.json\` 的 platforms 缩小到 ${requestedPlatforms.join('/')}（缺少 ${missing.join('/')}），但没有 \`deviations\` 里带 reason/revisitWhen 的 platforms 条目；仍按 Windows/macOS/Linux 全平台审计。`,
         fix: '在 deviations 中加 { "rule": "platforms", "value": [...], "reason": "...", "revisitWhen": "..." }，或恢复全平台。' });
   }
   // Any other deviation names a finding id: documented ones turn that finding into "accepted", undocumented ones are drift.

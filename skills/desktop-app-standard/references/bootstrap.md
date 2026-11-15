@@ -62,7 +62,7 @@ Electron 新项目需要可执行入口：在 package.json 指定主进程文件
 以下外部发布步骤按用户授权执行；本地迁移或只读评估不自动授权推送 tag、公开 Release 或配置 secrets。
 
 1. 运行审计，核对框架和 CI 发现。确认 tag 的版本源与测试门禁。
-2. 推送可信 tag，检查托管构建和直接发布结果。Tauri 矩阵逐平台补齐 Release，最终 latest.json 覆盖全部支持目标；Electron 单一发布器等待所有平台构建完成。
+2. 推送可信 tag，检查托管构建和直接发布结果。Tauri 矩阵逐平台补齐草稿，latest.json 覆盖全部支持目标且校验成功后自动公开；Electron 单一发布器等待所有平台构建完成。
 3. 匿名下载安装包与 feed，核对版本、摘要、签名和真实更新载体。
 4. 在目标 OS 安装 N，再发布 N+1，验证下载、验签、重启与数据保留，记录实际环境。
 5. 发布说明列出签名状态、平台/架构和下载选择。winget 沿用已有唯一提交渠道。
@@ -77,6 +77,6 @@ Electron 新项目需要可执行入口：在 package.json 指定主进程文件
 6. 上传前生成发布说明，使用本 tag 的变更和实际资产列表，说明平台、推荐下载包、便携版更新方式、签名状态及校验入口。沿用已有 changelog 时链接真实存在的版本段。
 7. 从安装后的 skill 复制模板及声明的脚本，在目标应用检查 YAML、安装、构建、测试和公开下载。随后按授权范围验收托管 runner 与真实安装升级。
 
-Tauri 同时复制 `scripts/release-assets.mjs` 到 `.github/scripts/release-assets.mjs`。默认 verify-release 只核对公开资产和更新 feed，不需要可选的构建证据。Electron 复制 `scripts/delivery-checks.mjs` 到 `.github/scripts/delivery-checks.mjs`，将模板中的 `electron-builder.yml` 换成真正生效的配置路径；NSIS 设置 installerLanguages: [en_US]、displayLanguageSelector: false。YAML 校验复用应用已安装的解析器（含 electron-builder 的依赖），不另装技能依赖；继承或动态配置先提供实际生效的 builder JSON。运行模板实际调用的检查，缺文件应先适配。
+Tauri 同时复制 `scripts/release-assets.mjs` 到 `.github/scripts/release-assets.mjs`。默认 verify-draft 在公开前核对草稿全部资产和更新 feed，不需要可选的构建证据。Electron 复制 `scripts/delivery-checks.mjs` 到 `.github/scripts/delivery-checks.mjs`，将模板中的 `electron-builder.yml` 换成真正生效的配置路径；NSIS 设置 installerLanguages: [en_US]、displayLanguageSelector: false。YAML 校验复用应用已安装的解析器（含 electron-builder 的依赖），不另装技能依赖；继承或动态配置先提供实际生效的 builder JSON。运行模板实际调用的检查，缺文件应先适配。
 
 Tauri 模板串行更新共享 latest.json。需缩短耗时时先记录各目标与总耗时，再试验并行构建独立 artifacts、单一汇总 job 生成 feed；覆盖缺架构、错误签名和部分重跑后再替换当前流程。

@@ -19,9 +19,9 @@ export async function hashFile(file) {
 }
 
 // Shared by direct-release verification and central winget consumers. No network writes.
-export function releaseReady(release, {tag, requiredAssets, allowPrerelease = false}) {
-  requireValue(release.tag_name === tag && release.draft === false && (allowPrerelease || release.prerelease === false) &&
-    (allowPrerelease || /^v\d+\.\d+\.\d+$/.test(tag)), 'Expected the public stable release');
+export function releaseReady(release, {tag, requiredAssets, allowPrerelease = false, expectedDraft = false}) {
+  requireValue(release.tag_name === tag && release.draft === expectedDraft && (allowPrerelease || release.prerelease === false) &&
+    (allowPrerelease || /^v\d+\.\d+\.\d+$/.test(tag)), expectedDraft ? 'Expected an unpublished draft release' : 'Expected the public stable release');
   requireValue(Array.isArray(requiredAssets) && requiredAssets.length > 0, 'Required asset inventory is empty');
   const assets = release.assets ?? [];
   requireValue(new Set(assets.map(asset => asset.name)).size === assets.length, 'Duplicate release asset');
@@ -33,10 +33,10 @@ export function releaseReady(release, {tag, requiredAssets, allowPrerelease = fa
   return assets;
 }
 
-export async function verifyPublicRelease({directory, release, requiredAssets, platforms, version, repo, tag}) {
+async function verifyReleaseAssets({directory, release, requiredAssets, platforms, version, repo, tag}, expectedDraft) {
   requireValue(tag === `v${version}`, 'Tag and app version mismatch');
   requireValue(release.prerelease === version.includes('-'), 'Release channel mismatch');
-  const assets = releaseReady(release, {tag, requiredAssets, allowPrerelease: version.includes('-')});
+  const assets = releaseReady(release, {tag, requiredAssets, allowPrerelease: version.includes('-'), expectedDraft});
   const payloads = assets.filter(asset => !/^SHA256SUMS(?:\.txt)?$/.test(asset.name));
   requireValue(payloads.length > 0, 'No release payloads');
   const names = new Set();
@@ -55,6 +55,9 @@ export async function verifyPublicRelease({directory, release, requiredAssets, p
   // The checksum from a previous run is deliberately excluded from its replacement.
   return payloads.sort((a, b) => a.name.localeCompare(b.name, 'en')).map(asset => `${asset.digest.slice(7).toLowerCase()}  ${asset.name}\n`).join('');
 }
+
+export const verifyPublicRelease = options => verifyReleaseAssets(options, false);
+export const verifyDraftRelease = options => verifyReleaseAssets(options, true);
 
 export function resolveAsset(url, {repo, tag, assets}) {
   const parsed = new URL(url);
@@ -155,8 +158,9 @@ async function main() {
     releaseReady(readJson(process.argv[3]), {tag: contract.tag, requiredAssets: contract.requiredAssets});
     return;
   }
-  if (process.argv[2] === 'verify-release') {
-    const checksums = await verifyPublicRelease({directory: 'dist', release: readJson(path.join(env.RUNNER_TEMP, 'release.json')),
+  if (['verify-release', 'verify-draft'].includes(process.argv[2])) {
+    const verify = process.argv[2] === 'verify-draft' ? verifyDraftRelease : verifyPublicRelease;
+    const checksums = await verify({directory: 'dist', release: readJson(path.join(env.RUNNER_TEMP, 'release.json')),
       requiredAssets: ['latest.json'], platforms: env.PLATFORMS?.split(' '), version: env.APP_VERSION, repo: env.REPO, tag: env.TAG});
     fs.writeFileSync('dist/SHA256SUMS', checksums);
     return;

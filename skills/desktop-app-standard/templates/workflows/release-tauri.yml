@@ -39,6 +39,19 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v7
         with: { node-version: 26, cache: npm }
+      - name: Refuse to overwrite an already published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp "repos/${{ github.repository }}/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          node <<'NODE'
+          const releases = require(process.env.RUNNER_TEMP + '/releases.json').flat();
+          if (releases.some(r => r.tag_name === process.env.TAG && !r.draft)) {
+            throw new Error('Release already public; publish corrections under a new version');
+          }
+          NODE
       - run: npm ci                     # Yarn 1: yarn install --frozen-lockfile · Yarn 4: corepack enable + yarn install --immutable
       - run: |
           sudo apt-get update
@@ -126,7 +139,7 @@ jobs:
         with:
           tagName: ${{ env.TAG }}
           releaseName: ${{ env.TAG }}
-          releaseDraft: false
+          releaseDraft: true
           prerelease: ${{ contains(env.TAG, '-') }}
           generateReleaseNotes: true
           releaseBody: |
@@ -152,13 +165,28 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with: { ref: '${{ needs.validate.outputs.commit }}' }
-      - name: Check updater coverage and attach checksums
+      - name: Verify the unpublished release and attach checksums
         shell: bash
         run: |
           set -euo pipefail
           gh release download "$TAG" --dir dist
           gh api "repos/$GH_REPO/releases/tags/$TAG" > "$RUNNER_TEMP/release.json"
-          node .github/scripts/release-assets.mjs verify-release
+          node .github/scripts/release-assets.mjs verify-draft
           (cd dist && sha256sum --strict -c SHA256SUMS)
           cd dist
           gh release upload "$TAG" SHA256SUMS --clobber
+      - name: Publish only after all platform assets pass verification
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: |
+          set -euo pipefail
+          current=$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)
+          [[ "$current" == "$SOURCE_COMMIT" ]] || { echo "::error::Tag moved after validation"; exit 1; }
+          if [[ "$TAG" == *-* ]]; then
+            gh release edit "$TAG" --draft=false --latest=false
+          else
+            gh release edit "$TAG" --draft=false --latest
+            latest=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
+            [[ "$latest" == "$TAG" ]] || { echo "::error::Latest release did not advance"; exit 1; }
+          fi

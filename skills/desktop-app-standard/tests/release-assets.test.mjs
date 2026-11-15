@@ -5,7 +5,22 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { hashFile, recordEvidence, verifyEvidence, verifyFeed, verifyPublicRelease, releaseReady } from '../scripts/release-assets.mjs';
+import { hashFile, recordEvidence, verifyEvidence, verifyFeed, verifyPublicRelease, verifyDraftRelease, releaseReady } from '../scripts/release-assets.mjs';
+
+test('prepublication checks accept only drafts and enforce full feed and digest verification', async () => {
+  const data = await fixture();
+  try {
+    const release = {tag_name: data.common.tag, draft: true, prerelease: false,
+      assets: [...data.assets, {name: 'latest.json', digest: 'sha256:' + await hashFile(path.join(data.directory, 'latest.json'))}]};
+    const options = {...data.common, directory: data.directory, release, requiredAssets: ['latest.json'], platforms: ['windows-x86_64']};
+    assert.match(await verifyDraftRelease(options), /latest.json/);
+    await assert.rejects(verifyPublicRelease(options), /public stable/);
+    await assert.rejects(verifyDraftRelease({...options, release: {...release, draft: false}}), /unpublished draft/);
+    await assert.rejects(verifyDraftRelease({...options, platforms: ['linux-aarch64']}), /Missing updater target/);
+    fs.appendFileSync(path.join(data.directory, data.names[0]), 'tampered');
+    await assert.rejects(verifyDraftRelease(options), /digest mismatch/);
+  } finally { fs.rmSync(data.directory, {recursive: true, force: true}); }
+});
 
 test('public verification rejects missing whole feeds, wrong URLs, signatures and payload hashes; reruns exclude checksums', async () => {
   const data = await fixture();

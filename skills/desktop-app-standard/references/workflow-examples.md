@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | Flow Launcher，WPF | Windows restore/build/test 后调用项目的 post_build.ps1，上传安装器、便携包、更新包和 RELEASES artifacts。release_deploy.yml 在已发布事件后更新网站和分发渠道。 | 测试与打包脚本相连，资产来自实际输出目录。 |
 | Joplin，Electron | macOS M1 workflow 从 tag 设置 PUBLISH_ENABLED，分别执行构建发布和 --publish=never，并注入签名配置；存在项目自己的资产修改逻辑。 | 按平台和发布条件调用已有打包器，明确可信 tag 和 PR 的发布权限。 |
-| Zettlr，Electron | 多平台构建 artifacts，单一 prepare_release 汇总并生成 SHA256；正式版使用 softprops 创建草稿，nightly 上传自有服务器。 | 构建与单一发布器的结构。本技能默认模板采用 draft: false，已有草稿流程按项目要求保留。 |
+| Zettlr，Electron | 多平台构建 artifacts，单一 prepare_release 汇总并生成 SHA256；正式版使用 softprops 创建草稿，nightly 上传自有服务器。 | 构建与单一发布器的结构。本技能 Tauri 模板暂存草稿并在校验后自动公开，Electron 模板采用 draft: false，已有草稿流程按项目要求保留。 |
 | Clash Verge Rev，Tauri | 多平台 tauri-action，另有批准快照、草稿准备、源码校验、通知和渠道逻辑，最后自动公开。 | 使用框架 Action 构建和生成 updater 元数据。项目特有审批流程按实际需要添加。 |
 | dnSpyEx，WPF | Windows 按 framework/RID 矩阵调用 build.ps1，复制整个构建输出并上传 artifacts。 | 发布完整目录，保留资源，按支持范围设置矩阵。 |
 
