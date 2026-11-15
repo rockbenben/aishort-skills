@@ -8,7 +8,8 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { stripTypeScriptTypes } from 'node:module';
 import { createViewerServer } from './serve-viewer.mjs';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
+import semver from 'semver';
 import { parseSkillMetadata, getSkillVersion } from './skill-metadata.mjs';
 import { TOOL_VERSION } from '../skills/desktop-app-standard/scripts/core.mjs';
 import { listenOnSafePort } from '../skills/html-shot/lib.mjs';
@@ -153,7 +154,8 @@ test('desktop metadata agrees with the runtime tool version', () => {
 });
 
 test('skill versions support portable metadata and legacy frontmatter', () => {
-  for (const field of ['version: "1.2.3"', 'metadata:\n  version: "1.2.3"']) {
+  for (const field of ['version: "1.2.3"', 'metadata:\n  version: "1.2.3"',
+    'defaults: &defaults {version: "1.2.3"}\nmetadata:\n  <<: *defaults']) {
     const source = `---\nname: fixture\n${field}\n---\nversion: 9.9.9\n`;
     assert.equal(getSkillVersion(parseSkillMetadata(source)), '1.2.3');
   }
@@ -270,18 +272,73 @@ test('bundle validation uses publisher ignores and checks installed Markdown ref
   }
 });
 
-test('validation and publishing use the locked ClawHub toolchain', () => {
+test('validation and publishing refresh ClawHub latest instead of relying on the lock snapshot', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   const lock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
   const installed = JSON.parse(fs.readFileSync(path.join(root, 'node_modules/clawhub/package.json'), 'utf8'));
-  assert.equal(installed.version, pkg.devDependencies.clawhub);
-  assert.equal(lock.packages['node_modules/clawhub'].version, installed.version);
+  assert.equal(pkg.devDependencies.clawhub, 'latest');
+  assert.equal(lock.packages[''].devDependencies.clawhub, 'latest');
+  assert.ok(semver.valid(installed.version));
   assert.equal(pkg.scripts['publish:skill'], 'clawhub publish');
+  assert.equal(pkg.scripts['prepublish:skill'], 'npm install --no-save --package-lock=false clawhub@latest');
   const workflow = yaml.load(fs.readFileSync(path.join(root, '.github/workflows/publish-clawhub.yml'), 'utf8'));
   for (const job of ['detect', 'publish']) {
     assert.ok(workflow.jobs[job].steps.some(step => step.run === 'npm ci'));
   }
+  const refresh = workflow.jobs.detect.steps.findIndex(step => step.run === pkg.scripts['prepublish:skill']);
+  const validate = workflow.jobs.detect.steps.findIndex(step => step.name === 'Validate skills');
+  assert.ok(refresh >= 0 && refresh < validate, 'validate the bundle with the latest CLI');
   assert.match(workflow.jobs.publish.steps.at(-1).run, /^npm run publish:skill -- /);
+});
+
+test('md-web publication uploads original file bytes through tickets and submits JSON metadata', () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'clawhub-publish-transport-'));
+  assert.equal(path.dirname(temporary), path.resolve(os.tmpdir()));
+  try {
+    const config = path.join(temporary, 'config.json');
+    fs.writeFileSync(config, JSON.stringify({registry: 'https://registry.invalid', token: 'fixture-only'}));
+    const result = mockedCommand('node_modules/clawhub/dist/cli/commands/publish.js', `
+      const assert = (await import('node:assert/strict')).default;
+      const fs = await import('node:fs');
+      const {createHash} = await import('node:crypto');
+      process.env.CLAWHUB_CONFIG_PATH = ${JSON.stringify(config)};
+      const tickets = [], bodies = [];
+      let submitted;
+      globalThis.fetch = async (url, options = {}) => {
+        const parsed = new URL(url);
+        if (parsed.hostname === 'upload.invalid') {
+          bodies.push(Buffer.from(options.body));
+          return Response.json({storageId: 'storage-' + bodies.length});
+        }
+        assert.equal(parsed.hostname, 'registry.invalid');
+        if (parsed.pathname === '/api/v1/resolve') return Response.json({match: null, latestVersion: {version: '1.3.2'}});
+        assert.equal(options.headers['Content-Type'], 'application/json');
+        const body = JSON.parse(options.body);
+        if (parsed.pathname === '/api/v1/skills/-/upload-url') {
+          tickets.push(body);
+          return Response.json({uploadUrl: 'https://upload.invalid/' + tickets.length, uploadTicket: 'ticket-' + tickets.length});
+        }
+        assert.equal(parsed.pathname, '/api/v1/skills');
+        submitted = body;
+        return Response.json({ok: true, skillId: 'skill', versionId: 'version', publicationStatus: 'pending'});
+      };
+      const {cmdPublish} = await import('./node_modules/clawhub/dist/cli/commands/publish.js');
+      const publication = await cmdPublish({workdir: process.cwd(), registry: 'https://registry.invalid', registrySource: 'cli'},
+        'skills/md-web', {version: '1.3.10', owner: 'fixture', quiet: true});
+      assert.equal(publication.status, 'pending-publication');
+      assert.equal(tickets.length, bodies.length);
+      assert.equal(submitted.files.length, bodies.length);
+      const docsify = tickets.findIndex(file => file.path === 'docsify-server/assets/docsify.min.js');
+      assert.ok(docsify >= 0, 'the viewer library must remain in the published bundle');
+      assert.deepEqual(bodies[docsify], fs.readFileSync('skills/md-web/docsify-server/assets/docsify.min.js'));
+      for (let i = 0; i < bodies.length; i++) {
+        assert.equal(tickets[i].sha256, createHash('sha256').update(bodies[i]).digest('hex'));
+        assert.equal(submitted.files[i].uploadTicket, 'ticket-' + (i + 1));
+      }
+      assert.equal(submitted.version, '1.3.10');
+    `);
+    assert.equal(result.status, 0, result.stderr);
+  } finally { fs.rmSync(temporary, {recursive: true, force: true}); }
 });
 
 function mockedCommand(file, setup) {

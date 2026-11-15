@@ -1,4 +1,4 @@
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 
 // Support existing skills while new metadata uses the portable nested field.
 export function getSkillVersion(frontmatter) {
@@ -8,7 +8,7 @@ export function getSkillVersion(frontmatter) {
 export function parseSkillMetadata(source) {
   const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) throw new Error('SKILL.md frontmatter is required');
-  const metadata = yaml.load(match[1]);
+  const metadata = yaml.load(match[1], {schema: yaml.CORE_SCHEMA.withTags([yaml.mergeTag])});
   if (!metadata || typeof metadata !== 'object') throw new Error('Skill metadata must be a mapping');
   return metadata;
 }

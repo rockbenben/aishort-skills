@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { listTextFiles } from 'clawhub/dist/skills.js';
+import { listSkillFiles } from 'clawhub/dist/skills.js';
 import { parseSkillMetadata, getSkillVersion } from './skill-metadata.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -30,7 +30,7 @@ for (const skill of skills.filter(skill => selected.includes(skill))) {
       return result;
     };
     try {
-      const files = await listTextFiles(path.join(root, 'skills', skill));
+      const files = await listSkillFiles(path.join(root, 'skills', skill));
       assert.ok(files.some(file => file.relPath === 'SKILL.md'));
       for (const file of files) {
         const target = path.join(installed, file.relPath);

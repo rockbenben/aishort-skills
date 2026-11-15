@@ -4,11 +4,12 @@
   "scripts": {
     "test": "node --test scripts/*.test.mjs",
     "validate": "node scripts/validate-skills.mjs",
-    "publish:skill": "clawhub publish"
+    "publish:skill": "clawhub publish",
+    "prepublish:skill": "npm install --no-save --package-lock=false clawhub@latest"
   },
   "devDependencies": {
-    "clawhub": "0.8.0",
-    "js-yaml": "4.3.2",
+    "clawhub": "latest",
+    "js-yaml": "5.5.0",
     "semver": "7.8.6"
   }
 }

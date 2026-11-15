@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 
 const workflow = yaml.load(fs.readFileSync('skills/wpf-desktop/templates/ci.yml', 'utf8'));
 

@@ -40,7 +40,23 @@ Windows 的文件 mode 不能代替 ACL。本次验证了私密模式创建顺�
 
 三个包的公开 scan API 均返回 isMalwareBlocked=false、isHiddenByMod=false、isSuspicious=false；security.status=suspicious 是扫描判定，与 moderation 字段不同。不能用 needs review 标签推导发布禁令。
 
-处理路径：向 ClawHub 提交以上时间、请求标识、文件散列和正常第三方库的复现证据，请其检查防护误拦截，或确认官方支持的上传路径。尚未发送申诉。重新生成 Token 或无条件重试不能解决这个已复现的内容触发问题；实际发布成功与新版本审核状态仍待上游解除拦截后验证。
+后续历史对比发现了本仓库可修复的发布工具回退，见下节。之前“只能等待上游解除拦截”的判断不完整。应先恢复成功时期使用的官方上传协议，再验证实际 CI；只有新协议仍受阻时才需要上游查询防护日志。尚未发送申诉或使用真实凭据发布。
+
+## 与早期成功版本的对比及根因补充
+
+[2026-11-09 成功 job](https://github.com/rockbenben/aishort-skills/actions/runs/42619859074/job/129169642919) 明确提交了 md-web@1.3.2。下载 ClawHub 已发布的 1.3.2 ZIP，包内 docsify.min.js 与当前 Git 文件逐字节完全一致：160909 字节，SHA256 为 `011de400031fdaf9f5ee9c21ef39b57b6fe70a9d2c83ee1cefafa82ebb3cf50e`。成功提交 45d0ce8、首次失败提交 886930f、当前 HEAD 的 Git 文件也完全相同。上节复现使用的本地工作区文件多了 CRLF 换行字节，所以本地散列不同，不是库代码发生变化。
+
+该库历史上只在 2026-03-17 的 1e777a3 提交做过一次功能修正：停用 Markdown 内嵌脚本的动态执行。其后长期发布成功；6 月提交仅迁移路径。11 月成功到首次失败之间只改了 viewer 的 config.js，最近 1.3.10 的安全修复改了 search.min.js；都没有改 docsify.min.js。
+
+| 发布条件 | 成功时期 | 首次失败及本轮失败 |
+| --- | --- | --- |
+| CLI 安装 | npm install -g clawhub，未固定版本 | npm ci，固定 clawhub@0.8.0 |
+| npm 版本时间线 | 0.25.1 于 11 月 3 日发布，是 11 月 9 日当时最新版本；日志未记录安装版本，版本号据发布时间推断 | 0.8.0 发布于 3 月 13 日，依赖锁明确固定此版本 |
+| 官方 CLI 实现 | 0.25.1：申请 upload ticket → 逐文件上传原始字节 → JSON 提交发布 | 0.8.0：所有原始文件组成单个 multipart POST /api/v1/skills |
+
+直接触发点是旧 multipart 请求带入该库时被 Vercel 拒绝；仓库引入该旧路径的原因是 886930f 把未固定的最新版 CLI 意外降级到 0.8.0。不是 JS 最近改坏，也不能只归因于服务端规则变化。此次修复先用成功时期的 0.25.1 验证上传协议，随后按用户要求改为 latest 标签，校验 CI 和每次 npm run publish:skill 执行前都主动安装 clawhub@latest，不再依赖锁文件里的历史版本，将校验和隔离安装脚本适配到新 API listSkillFiles。继续保留完整的 docsify 文件，不删减发布内容、不编码改名。
+
+新增回归调用真实 CLI cmdPublish、模拟网络端点，验证 md-web 每个原始文件先取得 ticket、逐文件上传且哈希一致，最终只向发布端点提交 JSON 元数据。没有真实上传或发布；实际 GitHub CI 提交成功仍需推送本次修复后确认。最终自动使用 npm latest（本次验证为 0.26.0），保留官方的上传凭证、逐文件上传及 JSON 提交流程。
 
 ## 误报、正常能力及扫描覆盖缺口
 

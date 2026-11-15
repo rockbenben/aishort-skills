@@ -10,7 +10,7 @@
  * skill.md and skills.md as well as SKILL.md; this repo ships SKILL.md, and the validator is
  * the stricter of the two on purpose.
  *
- * Uses the pinned ClawHub CLI's listTextFiles() so ignore files, text extensions,
+ * Uses the installed ClawHub CLI's listSkillFiles() so ignore files, supported files,
  * and installed resources match the publisher. Root tooling is installed with npm ci.
  * metadata.openclaw.files is checked as a resource declaration, not an upload filter.
  *
@@ -27,7 +27,7 @@ import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, relative, resolve, dirname } from "node:path";
 import semver from "semver";
-import { listTextFiles } from "clawhub/dist/skills.js";
+import { listSkillFiles } from "clawhub/dist/skills.js";
 
 const { parseSkillMetadata, getSkillVersion } = await import("./skill-metadata.mjs").catch((error) => {
   if (error.code !== "ERR_MODULE_NOT_FOUND" || !error.message.includes("'js-yaml'")) throw error;
@@ -121,7 +121,7 @@ for (const dirent of readdirSync(SKILLS, { withFileTypes: true })) {
   if (!validVersion(version))
     fail(skill, `version must be valid semver, got ${JSON.stringify(version)}`);
 
-  const bundled = (await listTextFiles(dir)).map(file => file.relPath);
+  const bundled = (await listSkillFiles(dir)).map(file => file.relPath);
   const ships = new Set(bundled);
 
   const oc = meta.metadata?.openclaw;

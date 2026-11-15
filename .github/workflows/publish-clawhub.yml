@@ -49,6 +49,10 @@ jobs:
       - name: Install repository tools
         run: npm ci
 
+      # npm ci restores a snapshot; refresh the publisher before validating its bundle.
+      - name: Install latest ClawHub for validation
+        run: npm install --no-save --package-lock=false clawhub@latest
+
       - name: Determine skills to test and publish
         id: list
         env:
