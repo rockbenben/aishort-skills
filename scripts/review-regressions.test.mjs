@@ -650,7 +650,7 @@ test('Tauri skips a declined version before downloading', async () => {
 
 test('Tauri migration retains its optional verifier and per-build proof before attestation', () => {
   const canonical = fs.readFileSync(path.join(root, 'skills/desktop-app-standard/scripts/release-assets.mjs'), 'utf8');
-  assert.equal(fs.readFileSync(path.join(root, 'skills/nextjs-to-tauri/release-assets.mjs'), 'utf8'), canonical);
+  assert.equal(fs.readFileSync(path.join(root, 'skills/nextjs-to-tauri/release-assets.js'), 'utf8'), canonical);
   for (const [file, buildName, verifyName] of [
     ['skills/nextjs-to-tauri/desktop-build.yml', 'publish-tauri', 'verify-draft'],
   ]) {
@@ -660,12 +660,53 @@ test('Tauri migration retains its optional verifier and per-build proof before a
     assert.ok(build.steps.some(step => step.uses?.startsWith('actions/upload-artifact') && step.with.name.includes('tauri-evidence')));
     const steps = workflow.jobs[verifyName].steps;
     assert.ok(steps.some(step => step.uses?.startsWith('actions/download-artifact')));
-    const verify = steps.findIndex(step => step.run?.includes('release-assets.mjs verify'));
+    const verify = steps.findIndex(step => step.run === 'bash .github/scripts/verify-draft.sh');
     const attest = steps.findIndex(step => step.uses?.startsWith('actions/attest@'));
     assert.ok(verify >= 0 && attest > verify);
     const expectedTargets = workflow.jobs[verifyName].env.TARGETS.split(' ').sort();
     assert.deepEqual(build.strategy.matrix.include.map(leg => leg.target).sort(), expectedTargets);
   }
+});
+
+test('Tauri draft verification stops on public releases, invalid assets and moved tags', () => {
+  const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+  const script = path.join(root, 'skills/nextjs-to-tauri/verify-draft.sh').replaceAll('\\', '/');
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'tauri-draft-shell-'));
+  const harness = `
+    gh() {
+      case "$1 $2" in
+        'release view') echo "$TEST_DRAFT" ;;
+        'release download') return 0 ;;
+        'api --paginate') echo '[]' ;;
+        'api '*) echo commit-query >&2; echo "$TEST_COMMIT" ;;
+        *) return 99 ;;
+      esac
+    }
+    node() {
+      [[ "$*" == '.github/scripts/release-assets.mjs verify' ]] || return 99
+      echo "verify-version:$APP_VERSION" >&2
+      return "$TEST_VERIFY_EXIT"
+    }
+    source "$1"
+  `;
+  try {
+    for (const scenario of [
+      {draft: 'true', verify: '0', commit: 'abc', ok: true, invoked: true, checkedTag: true},
+      {draft: 'false', verify: '0', commit: 'abc', ok: false, invoked: false, checkedTag: false},
+      {draft: 'true', verify: '1', commit: 'abc', ok: false, invoked: true, checkedTag: false},
+      {draft: 'true', verify: '0', commit: 'moved', ok: false, invoked: true, checkedTag: true},
+    ]) {
+      const result = spawnSync(bash, ['-c', harness, 'verify-test', script], {encoding: 'utf8', env: {
+        ...process.env, TAG: 'v1.2.3', REPO: 'owner/repo', DRAFT_ID: '123', SOURCE_COMMIT: 'abc',
+        RUNNER_TEMP: temporary.replaceAll('\\', '/'), TEST_DRAFT: scenario.draft,
+        TEST_VERIFY_EXIT: scenario.verify, TEST_COMMIT: scenario.commit,
+      }});
+      assert.ifError(result.error);
+      assert.equal(result.status === 0, scenario.ok, result.stderr);
+      assert.equal(result.stderr.includes('verify-version:1.2.3'), scenario.invoked);
+      assert.equal(result.stderr.includes('commit-query'), scenario.checkedTag);
+    }
+  } finally { fs.rmSync(temporary, {recursive: true, force: true}); }
 });
 
 function updaterHarness(update, events) {

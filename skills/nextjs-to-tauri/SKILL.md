@@ -3,7 +3,7 @@ name: nextjs-to-tauri
 description: Use when converting a Next.js 16 App Router static export into a Tauri 2 desktop app. Next.js 静态导出转 Tauri 2 / 打包 Next.js 为 Tauri 桌面应用. Covers native shell, tray, optional updater and GitHub Actions. Existing Tauri maintenance uses desktop-app-standard.
 
 metadata:
-  version: "1.1.20"
+  version: "1.1.21"
   openclaw:
     homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/nextjs-to-tauri
     emoji: "🦀"
@@ -13,7 +13,8 @@ metadata:
       - tauri-files.md
       - frontend-integration.md
       - desktop-build.yml
-      - release-assets.mjs
+      - release-assets.js
+      - verify-draft.sh
 ---
 
 # Next.js 16 → Tauri 2 Desktop App
@@ -106,7 +107,7 @@ Read-only assessment stops at findings and proposed checks. The bundled workflow
 5. **Frontend integration** (only the features you need). Adapt [frontend-integration.md](frontend-integration.md) to the project's existing desktop boundary (the examples use `src/app/desktop/`): external-links util (opener-based), auto-update hook, and — for `next-intl` apps — the language-choice hook (it remembers the locale the **user** picked in the switcher). Mount them in one `"use client"` component rendered inside your providers (e.g. antd `<App>`, inside `NextIntlClientProvider`). That component also installs the global external-link interceptor (gotcha #10). Switch locales with plain `router.push` (soft nav works in Tauri — never hard-nav a switch); if you remember the language, guard the launch redirect with a module-level flag (gotcha #11).
    The supplied updater downloads in the background before asking to install; include it only when that matches the product's update policy. Timing and network behavior are documented in `frontend-integration.md`.
 
-6. **Version single-source + CI.** Add `src-tauri/update-version.cjs` and an `update-version` script (copies `package.json` version into `tauri.conf.json`). Copy `desktop-build.yml` for cross-platform builds, signing, draft release with `latest.json`, and the portable-exe steps. Copy [release-assets.mjs](release-assets.mjs) into the app at `.github/scripts/release-assets.mjs`. The verifier compares the exact draft files and digests with per-target evidence from this workflow run before generating checksums and attestation.
+6. **Version single-source + CI.** Add `src-tauri/update-version.cjs` and an `update-version` script (copies `package.json` version into `tauri.conf.json`). Copy `desktop-build.yml` for cross-platform builds, signing, draft release with `latest.json`, and the portable-exe steps. Copy [release-assets.js](release-assets.js) into the app at `.github/scripts/release-assets.mjs`. Also copy [verify-draft.sh](verify-draft.sh) to `.github/scripts/verify-draft.sh`. The source template uses JavaScript syntax; keep the destination `.mjs` extension so Node loads it as an ES module regardless of the app package type. The verifier compares the exact draft files and digests with per-target evidence from this workflow run before generating checksums and attestation.
    The helper copies the project package version into Tauri config; review the resulting project diff with the migration changes.
 
    - **Make the git tag the single source of truth (the template does this):** on tag push, `npm pkg set version="${GITHUB_REF_NAME#v}"` (guarded `if: github.event_name == 'push'`) runs *before* `update-version`, so installer filenames, the embedded app version and `tagName: v__VERSION__` all equal the tag — you set the version by tagging, never by bumping branches. Do NOT point `tagName` at `github.ref_name` (gotcha #13).

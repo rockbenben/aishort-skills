@@ -39,4 +39,14 @@ Prettier 的 debug-check 对其中两个压缩库因附加 AST 位置字段报�
 
 ## 发布与最终判定
 
-提交推送后由 CI 发布，再观察指定版本的原始 scan/verify API 和审计页。上轮同一包曾在首次 Pass 后 148 秒被更新为 Review，因此不能把首次可见状态当作稳定结论；本轮会记录观察时间及后续变化。线上结果尚待发布后填写。
+第一轮提交 a935cf7 由 [CI 43716755716](https://github.com/rockbenben/aishort-skills/actions/runs/43716755716) 成功发布这三个版本，上传没有再次出现 Forbidden。上轮同一包曾在首次 Pass 后 148 秒被更新为 Review，因此不能把首次可见状态当作稳定结论。
+
+md-web 1.3.12 已显示 clean / Pass，checkedAt 为 2026-11-15T13:13:43.422Z。原始报告仍有 8 条静态提示及部分解析覆盖缺口，包括 upload.js、浏览器库和测试夹具；Pass 来自综合审核结论，不表示原始静态器全部完成。没有将尚存的缺口记成已修复。
+
+nextjs-to-tauri 1.1.20 仍为 suspicious / Review，checkedAt 为 2026-11-15T13:11:47.795Z。提示从 19 条降为 11 条，frontend-integration.md 与 tauri-files.md 已没有静态解析异常；剩余为 desktop-build.yml 的 static_parse_limit，以及 release-assets.mjs 的 opaque_content。线上组件清单明确将 .mjs 识别为 other，本地源码则有 .mjs → javascript 映射，说明仅凭版本号不能认定解析器行为一致。
+
+## 第二轮：模板格式和工作流分离
+
+nextjs-to-tauri 1.1.21 将随附的 ESM 模板命名为 release-assets.js，内容仍与 desktop-app-standard 的 release-assets.mjs 完全相同；使用时明确复制为 .github/scripts/release-assets.mjs，以保留项目 CommonJS/ESM 设置下的运行行为。此调整使静态器能够按已支持的 JavaScript 扩展名检查明文源码，没有隐藏或排除代码。
+
+把 YAML 中草稿完整性验证步骤原样提取到 verify-draft.sh，作为显式随附文件并从 SKILL.md 链接，工作流使用 bash 调用。保留草稿状态检查、全部资产下载、GitHub 摘要读取、原资产验证 CLI 和标签移动检查。根测试同步验证复制源与共享脚本一致，并用实际 Bash 验证成功路径、已公开版本拒绝、资产校验失败中断和标签移动拒绝四种情况。46/46 测试与元数据验证通过；三个文件的本地 tool_misuse ledger 均 completed。线上结果待发布后记录。
