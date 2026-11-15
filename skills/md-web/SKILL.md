@@ -3,7 +3,7 @@ name: md-web
 description: Use when the user explicitly asks to publish Markdown online or obtain a public share link through their S3 bucket. 发布 Markdown / 生成公开分享链接 / /md-web. Reads ~/.md-web/config.json. Viewer setup overwrites bucket-root files; optional expire_days manages retention. Local preview uses a local tool.
 
 metadata:
-  version: "1.3.7"
+  version: "1.3.9"
   openclaw:
     homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/md-web
     emoji: "🌐"
@@ -12,10 +12,10 @@ metadata:
     envVars:
       - name: MD_WEB_ACCESS_KEY
         required: false
-        description: Bucket access key, used instead of access_key in config.json.
+        description: Bucket access key fallback when access_key is omitted from config.json.
       - name: MD_WEB_SECRET_KEY
         required: false
-        description: Bucket secret key, used instead of secret_key in config.json.
+        description: Bucket secret key fallback when secret_key is omitted from config.json.
     files:
       - upload.js
       - "docsify-server/**"
@@ -34,12 +34,10 @@ Upload one raw `.md` file to the user's S3-compatible bucket; a Docsify viewer a
 
 ## Ground rules
 
-- **Document publishing.** A request for a public/shareable Markdown link authorizes uploading that document. Tell the user the link is public before uploading. For a request whose sharing scope is unclear, resolve that scope first. Apply existing authorization to retries of the same document.
+- **Document publishing.** An explicit request for online publication or a public/shareable Markdown link authorizes uploading that document, including retries. Tell the user the link is public before uploading; resolve unclear sharing scope first. Local preview or text organization stays local.
 - **Viewer setup.** Running `--setup` overwrites bucket-root files used by all published documents. Explain the affected paths and obtain authorization for setup, unless the user already authorized it in this task.
 - **Retention.** Adding, changing or removing `expire_days` changes the bucket policy. Obtain authorization for the requested retention change, unless it was already included in the user's instruction.
-- **Explicit requests only.** A request to organize text or preview locally is handled locally. Publishing requires a request for online publication or public sharing.
-- **Check the public scope.** Review the document for sensitive material outside the intended sharing scope; redact or clarify that material before uploading. Existing authorization applies to the supplied document.
-- Upload raw Markdown. Never generate HTML.
+- **Check the public scope.** Review for sensitive material outside the intended sharing scope and redact or clarify it before uploading. Publish raw Markdown; do not convert it to HTML.
 
 ## Workflow
 
@@ -73,11 +71,10 @@ node "{SKILL_DIR}/upload.js" <local-file> <remote-key>
   node "{SKILL_DIR}/upload.js" --setup
   ```
 
-  Setup writes root `index.html` / `README.md` and versioned `assets/<bundle-hash>/`, then applies `expire_days`. Apply the viewer-setup and retention authorization rules above. It is needed on first use, after a viewer upgrade, after changing `bucket` / `endpoint`, or when the active viewer differs. Existing document URLs stay unchanged. Changing `expire_days` needs a re-run too, but publish will not ask: run it yourself. Changing `public_url` only changes the printed link.
+  Setup performs the shared writes listed above and applies `expire_days`; both authorization rules still apply. Run it on first use, after a viewer upgrade, after changing `bucket` / `endpoint`, or when the active viewer differs. Existing document URLs stay unchanged. Retention changes also need setup, but publishing does not detect them; changing `public_url` only changes the printed link.
 - `SETUP_CONFLICT` means a concurrent setup changed the entry point or the provider did not return an ETag. Inspect the active viewer before retrying; do not automatically overwrite it. Setup requires S3 conditional object writes (`If-Match` / `If-None-Match`); unsupported providers fail without an unconditional fallback. An upgrade from the old flat-asset layout requires one explicit setup; old flat assets and version directories are not deleted.
 - `Warning: lifecycle —` means retention was not confirmed even if viewer setup succeeded. Follow the detail: a permission error may require lifecycle access or a provider-dashboard change; unsupported XML, a rule conflict or concurrent edit requires inspecting the actual policy. Do not treat every warning as a reason to broaden credentials.
 - Lifecycle administration has no atomic per-rule update: serialize it with other administrators. Setup re-reads before replacing the policy and warns on a detected edit, unsupported/incomplete XML, or a conflicting rule ID. Policy writes are not automatically retried; a warning does not mean the requested retention took effect. A narrow race remains between the final read and write.
-- Re-publishing creates a **new** link; the old one stays live.
 
 ### 4. Reply
 
@@ -95,15 +92,15 @@ node "{SKILL_DIR}/upload.js" <local-file> <remote-key>
 
 ## First-time configuration
 
-1. Explain that the skill needs an S3-compatible bucket with public read access. Setup guide: `{SKILL_DIR}/README.md` (Chinese: `{SKILL_DIR}/README.zh.md`) — Cloudflare R2 step by step, plus AWS S3, B2, Spaces, Wasabi, COS endpoints.
+1. Explain that the skill needs an S3-compatible bucket with public read access. Setup guide: [README.md](README.md) ([中文](README.zh.md)) — Cloudflare R2 step by step, plus AWS S3, B2, Spaces, Wasabi, COS endpoints.
 2. Collect the required fields:
-   - `access_key`, `secret_key` — API token credentials (**Object Read & Write** is enough)
+   - `access_key`, `secret_key` — credentials for object read/write access (R2 token label: **Object Read & Write**); bucket lifecycle administration is separate below.
    - `endpoint` — hostname without `https://`, e.g. `ACCOUNT_ID.r2.cloudflarestorage.com`
    - `bucket`
    - `public_url` — custom domain if bound (recommended; `r2.dev` URLs are rate-limited), else `https://pub-XXXX.r2.dev`
 
    Secrets should not travel through chat if avoidable: offer that the user writes `config.json` themselves, or omits the two keys and exports `MD_WEB_ACCESS_KEY` / `MD_WEB_SECRET_KEY` instead (the file wins when both are set).
-3. Optional: `region` (default `auto`; AWS needs the real region, e.g. `us-east-1`) and `expire_days` (auto-delete uploads after N days; `0` removes the rule). **Omit `expire_days` unless the user asks for auto-expiry** — managing it needs an Admin Read & Write token. The script only edits its own `md-web/`-scoped rule and preserves every other lifecycle rule.
+3. Optional: `region` (default `auto`; AWS needs the real region, e.g. `us-east-1`) and `expire_days` (auto-delete uploads after N days; `0` removes the rule). **Omit `expire_days` unless the user asks for auto-expiry**. Lifecycle administration needs provider-specific bucket permissions: R2 uses [Admin Read & Write](https://developers.cloudflare.com/r2/api/tokens/#permissions), while AWS uses [lifecycle IAM permissions](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketLifecycleConfiguration.html), not an R2 token label. The script only edits its own `md-web/` rule and preserves other rules.
 4. Write `~/.md-web/config.json` (create the directory; on macOS/Linux the script tightens the file to owner-only access — mode `0600` — as the user who ran it; it never asks for root and never needs elevated privileges):
 
 ```json
