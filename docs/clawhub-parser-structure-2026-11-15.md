@@ -49,4 +49,17 @@ nextjs-to-tauri 1.1.20 仍为 suspicious / Review，checkedAt 为 2026-11-15T13:
 
 nextjs-to-tauri 1.1.21 将随附的 ESM 模板命名为 release-assets.js，内容仍与 desktop-app-standard 的 release-assets.mjs 完全相同；使用时明确复制为 .github/scripts/release-assets.mjs，以保留项目 CommonJS/ESM 设置下的运行行为。此调整使静态器能够按已支持的 JavaScript 扩展名检查明文源码，没有隐藏或排除代码。
 
-把 YAML 中草稿完整性验证步骤原样提取到 verify-draft.sh，作为显式随附文件并从 SKILL.md 链接，工作流使用 bash 调用。保留草稿状态检查、全部资产下载、GitHub 摘要读取、原资产验证 CLI 和标签移动检查。根测试同步验证复制源与共享脚本一致，并用实际 Bash 验证成功路径、已公开版本拒绝、资产校验失败中断和标签移动拒绝四种情况。46/46 测试与元数据验证通过；三个文件的本地 tool_misuse ledger 均 completed。线上结果待发布后记录。
+把 YAML 中草稿完整性验证步骤原样提取到 verify-draft.sh，作为显式随附文件并从 SKILL.md 链接，工作流使用 bash 调用。保留草稿状态检查、全部资产下载、GitHub 摘要读取、原资产验证 CLI 和标签移动检查。根测试同步验证复制源与共享脚本一致，并用实际 Bash 验证成功路径、已公开版本拒绝、资产校验失败中断和标签移动拒绝四种情况。46/46 测试与元数据验证通过；三个文件的本地 tool_misuse ledger 均 completed。
+
+提交 2c203dd 已推送，[CI 43718190954](https://github.com/rockbenben/aishort-skills/actions/runs/43718190954) 全部通过，2026-11-15T13:20:52Z 提交 1.1.21 发布成功。线上完整报告 checkedAt 为 2026-11-15T13:27:44.541Z，仍为 suspicious / Review、11 条提示。组件清单已正确识别 release-assets.js 为 javascript、verify-draft.sh 为 shell；新 shell 文件没有静态解析异常。但 desktop-build.yml 的 static_parse_limit 和 release-assets.js 的 opaque_content 仍然存在。由此可排除“仅仅扩展名不识别”是全部原因，不能宣称第二轮已消除覆盖缺口。
+
+11 条中有 4 条 AE1，来自同两个文件的多处引用；其余 7 条（两条应用自更新、未声明工具范围、公共包元数据请求、三条 CI sudo）均有 llm_review_outcome: disagreed。它们是上下文误报；解析覆盖不足则是仍存在的分析限制，不能仅因综合复核不同意其他提示就一并忽略。
+
+线上异常没有提供触发表达式或行号，只有文件名和通用理由；同版号的当前上游源码对这些文件能完成静态分析。因此目前证据支持部署解析器行为不同，尚不能定位剩余两处的单一触发表达式，也不能认定存在恶意行为或断言应用代码没有其他问题。继续删除功能、缩减校验或盲目发版没有证据支持。若继续解决线上覆盖，需要平台提供该部署构建的具体诊断，或用同一构建复现后再调整合法源码。
+
+md-web 1.3.12 的 clean / Pass 已连续观察超过五分钟；截至本轮完整报告核对仍保持该状态。它的部分静态覆盖限制保留在前文，不宣称其全包解析已完整。
+
+可复核的指定版本原始接口：
+
+- [md-web 1.3.12 scan](https://clawhub.ai/api/v1/skills/md-web/scan?version=1.3.12)、[verify](https://clawhub.ai/api/v1/skills/md-web/verify?version=1.3.12)。
+- [nextjs-to-tauri 1.1.21 scan](https://clawhub.ai/api/v1/skills/nextjs-to-tauri/scan?version=1.1.21)、[verify](https://clawhub.ai/api/v1/skills/nextjs-to-tauri/verify?version=1.1.21)。
