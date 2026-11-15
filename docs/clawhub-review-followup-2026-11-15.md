@@ -1,6 +1,6 @@
 # ClawHub 最新扫描复核（2026-11-15，第二轮）
 
-本轮检查的是当前已发布版本，不是旧缓存，也不是 pending scan：md-web 1.3.10、html-shot 1.2.7、nextjs-to-tauri 1.1.19。三者 security.status 均为 suspicious，但 isPendingScan、isMalwareBlocked、isHiddenByMod、isRemoved 均为 false。上传成功与安全扫描通过是两件事。
+本轮修复前检查的已发布版本为 md-web 1.3.10、html-shot 1.2.7、nextjs-to-tauri 1.1.19，不是旧缓存或 pending scan。三者当时 security.status 均为 suspicious，但 isPendingScan、isMalwareBlocked、isHiddenByMod、isRemoved 均为 false。上传成功与安全扫描通过是两件事。md-web 与 html-shot 的重新发布结果见末节。
 
 ## 结论
 
@@ -91,4 +91,17 @@ ClawHub 发布工具的自动 latest 策略不变。这与 html-shot 面向使�
 
 ## 后续与验证边界
 
-本轮为 README 澄清和安装示例修改，未改动渲染、上传或 Tauri 构建执行代码。不宣称本地测试能清除远端 review 标记。新版本尚未提交或发布；需要发布后再读扫描结果。若只剩解析覆盖缺口及上述已说明条目，需要向 ClawHub 提交完整原始报告与源码依据，申请人工复核或修正扫描器；尚未代用户发送申诉。
+本轮为 README 澄清和安装示例修改，未改动渲染、上传或 Tauri 构建执行代码。本地根测试 45/45 通过，技能校验为 0 failure / 0 warning。不用本地测试替代远端扫描结论；本次已实际提交、推送并完成新版本扫描。nextjs-to-tauri 本轮未改动或重新发布；其解析覆盖缺口和误报仍可能需要人工复核。尚未代用户发送申诉。
+
+## 重新发布与扫描结果
+
+2026-11-15，修复提交 [ed69ac6](https://github.com/rockbenben/aishort-skills/commit/ed69ac64f67ebbb3c9da33f69ae62ece0f6c5f0a) 已推送到 main。[发布 CI](https://github.com/rockbenben/aishort-skills/actions/runs/43713068809) 中两个发布 job 均成功，随后等待并读取指定版本的扫描结果，核对官方审计页面。
+
+| Skill | 新版本 | 最终安全判定 | 官方审计页 | 底层 Skillspector 条目 |
+| --- | --- | --- | --- | --- |
+| md-web | 1.3.11 | clean / benign，security.passed=true | [Pass](https://clawhub.ai/rockbenben/skills/md-web/security-audit) | 9 → 8 |
+| html-shot | 1.2.8 | clean / benign，security.passed=true | [Pass](https://clawhub.ai/rockbenben/skills/html-shot/security-audit) | 15 → 13 |
+
+结果来自对应版本的 scan 与 verify API，而非旧版本缓存。两个审计页显示的版本分别为 1.3.11 和 1.2.8。html-shot 的最终安装机制维度为 OK；md-web 的指令范围维度为 OK。底层仍有解析覆盖不足和未被最终审核确认的提示，因此 Pass 不等于所有扫描器零告警或完整安全证明。
+
+verify API 的总 decision 仍为 fail，唯一 reason 为 card.missing；这与其中 security.passed=true 是不同字段。该 reason 表示生成卡片缺失，不是安全审计失败，官方安全审计页已明确显示 Pass。本轮未将卡片生成作为额外发布动作处理。
