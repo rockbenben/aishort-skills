@@ -65,7 +65,7 @@ clawhub install html-shot
 
 ### [wpf-desktop](skills/wpf-desktop/) — WPF desktop apps on .NET
 
-Review a WPF repository's SDK, packages, startup, windows, DPI, tray behavior and publish profiles, then fix verified issues. New apps and whole-project upgrades target **.NET 10**. For a specific fault, check the affected path and upgrade the dependencies needed to fix it. A read-only assessment reports findings and evidence.
+Review a WPF repository's SDK, packages, startup, windows, DPI, tray behavior and publish profiles, then fix verified issues. New apps and whole-project upgrades target **.NET 10**. Focused fixes check the affected path and also upgrade adopted recommended dependencies below their selected targets, including required companion changes. A read-only assessment reports findings and evidence.
 
 ```bash
 clawhub install wpf-desktop
@@ -77,7 +77,7 @@ clawhub install wpf-desktop
 
 ### [nextjs-to-tauri](skills/nextjs-to-tauri/) — Next.js 16 → Tauri 2 desktop app
 
-Wrap a client-side Next.js 16 (App Router) app in a thin Tauri 2 native shell — ship a ~3–10 MB desktop/portable `.exe` (vs ~150 MB Electron) with auto-update, system tray, single-instance, and window-state, built entirely in GitHub Actions (no local Rust). The value is the hard-won gotchas: the `trailingSlash` white-screen on static export, next-intl i18n routing, updater signing keys, and cross-platform CI.
+Wrap a static-exportable Next.js 16 (App Router) app in a thin Tauri 2 native shell with desktop/portable artifacts, optional updates, tray, single-instance and window-state integration. GitHub Actions can build the native shell; local native verification needs its platform toolchain. The value is the hard-won gotchas: the `trailingSlash` white-screen on static export, next-intl i18n routing, updater signing keys, and cross-platform CI.
 
 ```bash
 clawhub install nextjs-to-tauri
@@ -88,7 +88,7 @@ clawhub install nextjs-to-tauri
 
 ### [nextjs-to-electron](skills/nextjs-to-electron/) — Next.js → Electron desktop app
 
-Wrap a client-side Next.js (App Router) static export in a thin Electron shell — for **fully-offline / intranet** Windows machines that lack the WebView2 runtime, where Tauri won't launch. Electron ships its own Chromium (~150 MB), so it just runs. Prefer the `electron/` main process for locale persistence, window state, single-instance and tray behavior; adjust export or desktop integration code when needed while preserving the web build. The value is the gotchas: the `file://` white-screen trap, the custom `app://` protocol, next-intl static-export i18n, and electron-builder packaging.
+Wrap a static-exportable Next.js (App Router) app in a thin Electron shell — for **fully-offline / intranet** Windows machines that lack the WebView2 runtime, where Tauri won't launch. Electron supplies Chromium, so it does not depend on system WebView2; measure the actual package size. Prefer the `electron/` main process for locale persistence, window state, single-instance and tray behavior; adjust export or desktop integration code when needed while preserving the web build. The value is the gotchas: the `file://` white-screen trap, the custom `app://` protocol, next-intl static-export i18n, and electron-builder packaging.
 
 ```bash
 clawhub install nextjs-to-electron
@@ -99,9 +99,9 @@ clawhub install nextjs-to-electron
 
 ### [desktop-app-standard](skills/desktop-app-standard/) — build or upgrade a Tauri/Electron app to our house style, and audit .NET runtime/SDK
 
-**Building:** the skill ships that house style as ten short sections plus workflow templates. It covers six targets (Windows/macOS/Linux × x64/arm64), npm with a lockfile, Actions pinned by major tag or exact version, no Dependabot, the git tag as the version source, tests and packaging followed by direct publication, an updater, signing before checksums and upload, and winget manifests maintained in `winget-manifests`.
+**Building:** the skill ships that house style as ten short sections plus workflow templates. It covers six targets (Windows/macOS/Linux × x64/arm64), npm with a lockfile, Actions using major tags or the project pin policy, existing dependency-management tools, the git tag as the version source, tests and packaging followed by direct publication, an updater, signing before checksums and upload, and winget manifests maintained in `winget-manifests`.
 
-A repository-wide review checks versions, security settings, performance, packaging and updates, then addresses demonstrated issues. New apps and whole-project upgrades follow the skill’s [declared major versions](skills/desktop-app-standard/references/version-targets.json). Focused fixes change the dependencies they require. Read-only assessments report gaps and evidence.
+A repository-wide review checks versions, security settings, performance, packaging and updates, then addresses demonstrated issues. New apps and whole-project upgrades follow the skill’s [declared major versions](skills/desktop-app-standard/references/version-targets.json). Focused fixes also upgrade adopted recommended dependencies below target; other changes stay within task scope. Read-only assessments report gaps and evidence.
 
 Findings that match the house style come back as `notice` rather than as P0/P1/P2, and a decision you have already made goes into `.desktop-policy.json` as a `deviation` with a reason and a revisit condition — after which that finding counts as accepted instead of nagging you every week.
 

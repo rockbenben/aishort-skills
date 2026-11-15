@@ -19,5 +19,8 @@
 | “修复 WPF 多显示器 DPI 错位” | wpf-desktop，验证受影响窗口和依赖。 |
 | “导出这个 HTML 卡片为透明 PNG” | html-shot 的 render.mjs。 |
 | “从现有 SVG 生成应用图标” | html-shot 的 icons.mjs。 |
+| “把这个 PNG 转成 favicon.ico” | html-shot 的 icons.mjs；本地栅格图标转换不启动 Chromium。 |
+| “修掉照片里的背景或物体” | 图像编辑工具，不因输入是 PNG 就选 html-shot。 |
+| “把含构建期 Server Components 的 Next.js 静态导出迁到桌面” | 按目标选择迁移 skill；保留可静态导出的组件，只为实际桌面 hook 增加客户端边界。 |
 
 仍有歧义时核对项目文件和用户目标，再进入对应任务模式。

@@ -65,7 +65,7 @@ clawhub install html-shot
 
 ### [wpf-desktop](skills/wpf-desktop/) —— .NET 上的 WPF 桌面应用
 
-只给 WPF 项目时，全面检查 SDK、NuGet、启动、窗口、DPI、托盘和发布配置，并修复可验证的问题。新建或整体升级对齐 **.NET 10**。局部修复检查受影响路径，只做必要的配套升级。只读评估交付发现与证据。
+只给 WPF 项目时，全面检查 SDK、NuGet、启动、窗口、DPI、托盘和发布配置，并修复可验证的问题。新建或整体升级对齐 **.NET 10**。局部修复检查受影响路径，同时升级已采用且低于目标的建议依赖及必要配套。只读评估交付发现与证据。
 
 ```bash
 clawhub install wpf-desktop
@@ -77,7 +77,7 @@ clawhub install wpf-desktop
 
 ### [nextjs-to-tauri](skills/nextjs-to-tauri/) —— Next.js 16 → Tauri 2 桌面应用
 
-把纯客户端的 Next.js 16（App Router）应用包进一层薄薄的 Tauri 2 原生外壳 —— 发布一个约 3–10 MB 的桌面/便携版 `.exe`（Electron 约 150 MB），自带自动更新、系统托盘、单实例和窗口状态，全部在 GitHub Actions 里构建（本地不需要 Rust）。价值在那些踩过的坑：静态导出时 `trailingSlash` 导致的白屏、next-intl 的 i18n 路由、updater 签名密钥，以及跨平台 CI。
+把可静态导出的 Next.js 16（App Router）应用包进一层薄薄的 Tauri 2 原生外壳 ，支持桌面安装包与便携产物、可选自动更新、系统托盘、单实例和窗口状态；可在 GitHub Actions 构建，本地验证原生行为仍需要相应工具链与环境。价值在那些踩过的坑：静态导出时 `trailingSlash` 导致的白屏、next-intl 的 i18n 路由、updater 签名密钥，以及跨平台 CI。
 
 ```bash
 clawhub install nextjs-to-tauri
@@ -88,7 +88,7 @@ clawhub install nextjs-to-tauri
 
 ### [nextjs-to-electron](skills/nextjs-to-electron/) —— Next.js → Electron 桌面应用
 
-把纯客户端的 Next.js（App Router）静态导出包进一层薄薄的 Electron 外壳 —— 给**完全离线 / 内网**、缺 WebView2 运行时的 Windows 机器用，那种机器上 Tauri 起不来。 Electron 自带 Chromium（约 150 MB），所以直接能跑。优先用 `electron/` 主进程承接语言持久化、窗口状态、单实例和系统托盘，必要时调整静态导出或桌面集成代码，保留 Web 构建行为。价值在那些坑：`file://` 白屏陷阱、自定义 `app://` 协议、next-intl 静态导出 i18n，以及 electron-builder 打包。
+把可静态导出的 Next.js（App Router）应用包进一层薄薄的 Electron 外壳 —— 给**完全离线 / 内网**、缺 WebView2 运行时的 Windows 机器用，那种机器上 Tauri 起不来。 Electron 自带 Chromium，不依赖系统 WebView2；包大小按实际产物记录。优先用 `electron/` 主进程承接语言持久化、窗口状态、单实例和系统托盘，必要时调整静态导出或桌面集成代码，保留 Web 构建行为。价值在那些坑：`file://` 白屏陷阱、自定义 `app://` 协议、next-intl 静态导出 i18n，以及 electron-builder 打包。
 
 ```bash
 clawhub install nextjs-to-electron
@@ -99,9 +99,9 @@ clawhub install nextjs-to-electron
 
 ### [desktop-app-standard](skills/desktop-app-standard/) —— 按 house style 建与升 Tauri/Electron 桌面应用，并审计 .NET 运行时/SDK
 
-**建**：这套 house style 以十个短章节和 workflow 模板交付，覆盖六个目标（Windows/macOS/Linux × x64/arm64）、npm 和锁文件、Action 大版本或精确版本标签、不装 Dependabot、git tag 作为版本源、测试和打包后直接公开、内置 updater、计算摘要和上传前完成签名，以及由 winget-manifests 统一维护 winget 清单。
+**建**：这套 house style 以十个短章节和 workflow 模板交付，覆盖六个目标（Windows/macOS/Linux × x64/arm64）、npm 和锁文件、Action 大版本或项目指定的 pin 策略、沿用既有依赖管理工具、git tag 作为版本源、测试和打包后直接公开、内置 updater、计算摘要和上传前完成签名，以及由 winget-manifests 统一维护 winget 清单。
 
-只给项目时，全面检查版本、安全配置、性能、打包和更新链路，并修复可验证的问题。新建或整体升级按技能的[目标大版本表](skills/desktop-app-standard/references/version-targets.json)更新依赖及锁文件。局部修复只做必要的配套升级。只读评估交付发现与证据。
+只给项目时，全面检查版本、安全配置、性能、打包和更新链路，并修复可验证的问题。新建或整体升级按技能的[目标大版本表](skills/desktop-app-standard/references/version-targets.json)更新依赖及锁文件。局部修复也升级已采用且低于目标的建议依赖，其余改动限于任务所需。只读评估交付发现与证据。
 
 符合 house style 的发现按 `notice` 报，不计入 P0/P1/P2；已经做过的取舍写进 `.desktop-policy.json` 的 `deviations`（带 reason 与 revisitWhen），此后那条发现按"已接受"处理，不再每周来烦你。
 
