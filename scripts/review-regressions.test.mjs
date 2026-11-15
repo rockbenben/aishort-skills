@@ -648,29 +648,43 @@ test('Tauri skips a declined version before downloading', async () => {
 });
 
 
-test('Tauri migration retains its optional verifier and per-build proof before attestation', () => {
-  const canonical = fs.readFileSync(path.join(root, 'skills/desktop-app-standard/scripts/release-assets.mjs'), 'utf8');
-  assert.equal(fs.readFileSync(path.join(root, 'skills/nextjs-to-tauri/release-assets.js'), 'utf8'), canonical);
+test('Tauri migration retains its verifier functions and per-build proof before attestation', async () => {
+  const canonical = await import('../skills/desktop-app-standard/scripts/release-assets.mjs');
+  const modules = await Promise.all(['common', 'feed', 'release', 'record', 'verify'].map(name =>
+    import('../skills/nextjs-to-tauri/release-assets/' + name + '.js')));
+  const split = Object.assign({}, ...modules);
+  for (const [name, fn] of Object.entries(canonical)) {
+    assert.equal(split[name]?.toString().replaceAll('\r\n', '\n'), fn.toString().replaceAll('\r\n', '\n'), name);
+  }
   for (const [file, buildName, verifyName] of [
     ['skills/nextjs-to-tauri/desktop-build.yml', 'publish-tauri', 'verify-draft'],
   ]) {
     const workflow = yaml.load(fs.readFileSync(path.join(root, file), 'utf8'));
-    const build = workflow.jobs[buildName];
-    assert.ok(build.steps.some(step => step.run?.includes('release-assets.mjs record') && step.env.ARTIFACT_PATHS.includes('steps.tauri.outputs.artifactPaths')));
+    const caller = workflow.jobs[buildName];
+    assert.equal(caller.uses, './.github/workflows/tauri-build.yml');
+    assert.equal(caller.strategy['max-parallel'], 1);
+    assert.deepEqual(Object.keys(caller.secrets).sort(), ['TAURI_SIGNING_PRIVATE_KEY', 'TAURI_SIGNING_PRIVATE_KEY_PASSWORD']);
+    const reusable = yaml.load(fs.readFileSync(path.join(root, 'skills/nextjs-to-tauri/tauri-build.yml'), 'utf8'));
+    assert.deepEqual(Object.keys(caller.with).sort(), Object.keys(reusable.on.workflow_call.inputs).sort());
+    const build = reusable.jobs.build;
+    assert.ok(build.steps.some(step => step.run === 'bash .github/scripts/ci/record-build.sh' && step.env.ARTIFACT_PATHS.includes('steps.tauri.outputs.artifactPaths')));
     assert.ok(build.steps.some(step => step.uses?.startsWith('actions/upload-artifact') && step.with.name.includes('tauri-evidence')));
+    assert.equal(build.steps.find(step => step.id === 'tauri').with.releaseDraft, true);
+    assert.equal(caller.with.publish, "${{ github.event_name == 'push' }}");
+    assert.deepEqual(workflow.jobs[verifyName].needs, ['draft', buildName]);
     const steps = workflow.jobs[verifyName].steps;
     assert.ok(steps.some(step => step.uses?.startsWith('actions/download-artifact')));
-    const verify = steps.findIndex(step => step.run === 'bash .github/scripts/verify-draft.sh');
+    const verify = steps.findIndex(step => step.run === 'bash .github/scripts/ci/verify-draft.sh');
     const attest = steps.findIndex(step => step.uses?.startsWith('actions/attest@'));
     assert.ok(verify >= 0 && attest > verify);
     const expectedTargets = workflow.jobs[verifyName].env.TARGETS.split(' ').sort();
-    assert.deepEqual(build.strategy.matrix.include.map(leg => leg.target).sort(), expectedTargets);
+    assert.deepEqual(caller.strategy.matrix.include.map(leg => leg.target).sort(), expectedTargets);
   }
 });
 
 test('Tauri draft verification stops on public releases, invalid assets and moved tags', () => {
   const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
-  const script = path.join(root, 'skills/nextjs-to-tauri/verify-draft.sh').replaceAll('\\', '/');
+  const script = path.join(root, 'skills/nextjs-to-tauri/ci/verify-draft.sh').replaceAll('\\', '/');
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'tauri-draft-shell-'));
   const harness = `
     gh() {

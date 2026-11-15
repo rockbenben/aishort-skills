@@ -50,6 +50,21 @@ for (const skill of skills.filter(skill => selected.includes(skill))) {
         run(['upload.js', '--help']);
         assert.match(run(['--test', 'tests/shared-state.test.cjs']).stdout, /(?:#|ℹ) tests [1-9]\d*/);
       }
+      if (skill === 'nextjs-to-tauri') {
+        const scriptDirectory = path.join(installed, '.github/scripts');
+        fs.mkdirSync(scriptDirectory, {recursive: true});
+        fs.copyFileSync(path.join(installed, 'release-assets.js'), path.join(scriptDirectory, 'release-assets.mjs'));
+        fs.cpSync(path.join(installed, 'release-assets'), path.join(scriptDirectory, 'release-assets'), {recursive: true});
+        const tests = path.join(installed, '.github/tests');
+        fs.mkdirSync(tests, {recursive: true});
+        // Run the existing safety suite against the installed modular entrypoint.
+        fs.copyFileSync(path.join(root, 'skills/desktop-app-standard/tests/release-assets.test.mjs'), path.join(tests, 'release-assets.test.mjs'));
+        for (const type of ['commonjs', 'module']) {
+          fs.writeFileSync(path.join(installed, 'package.json'), JSON.stringify({private: true, type}));
+          const result = run(['--test', '.github/tests/release-assets.test.mjs']);
+          assert.match(result.stdout, /(?:#|ℹ) tests [1-9]\d*/);
+        }
+      }
       if (skill === 'deepl-translate-node') {
         const result = run(['--input-type=module', '-e', `
           process.env.DEEPL_API_KEY = 'fixture-only';

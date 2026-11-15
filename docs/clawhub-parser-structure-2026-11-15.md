@@ -63,3 +63,18 @@ md-web 1.3.12 的 clean / Pass 已连续观察超过五分钟；截至本轮完�
 
 - [md-web 1.3.12 scan](https://clawhub.ai/api/v1/skills/md-web/scan?version=1.3.12)、[verify](https://clawhub.ai/api/v1/skills/md-web/verify?version=1.3.12)。
 - [nextjs-to-tauri 1.1.21 scan](https://clawhub.ai/api/v1/skills/nextjs-to-tauri/scan?version=1.1.21)、[verify](https://clawhub.ai/api/v1/skills/nextjs-to-tauri/verify?version=1.1.21)。
+
+## 第三轮：完整拆分工作流与校验模块（1.1.22）
+
+按职责拆分而不缩减检查：
+
+- desktop-build.yml 从约 15 KB 改为约 3.3 KB，保留原触发器、并发队列、草稿预检、四平台串行矩阵及最终验证。矩阵调用同仓库 tauri-build.yml（约 5 KB）；显式传递构建目标、草稿 ID、源提交、发布标志和两项原签名密钥。
+- 多行 Bash 操作提取为 ci/ 下 6 个明文脚本，分别处理草稿、portable、构建证据、草稿验证、摘要上传和运行摘要。所有脚本继续随技能发布，并在 release-workflow.md 列出复制映射。没有对扫描隐藏内容。
+- 原 release-assets.js 拆为轻量入口和 release-assets/ 下 6 个模块：通用输入与哈希、feed 校验、构建证据记录、证据验证、公开/草稿 release 验证和 CLI。各模块约 0.8–3.3 KB。保留原导出函数及 record、verify、ready、verify-release、verify-draft 命令；目标项目入口仍为 .mjs，模块目录自带 type: module，避免应用包类型改变模块加载方式。
+- 原工作流注释中的操作边界、命名、portable 限制、签名密钥、发布和排队要求集中到 release-workflow.md。保留人工公开草稿的流程。
+
+验证结果：根测试 46/46 通过；公开导出校验函数的源码与 desktop-app-standard 原版一致（仅标准化换行）。隔离发布包在 CommonJS、ESM 两类项目中均执行原有资产校验套件，覆盖跨平台证据合并、旧包混入、缺失包、摘要篡改、错误源提交/运行、签名与 feed 等拒绝路径。原 Bash 草稿验证成功/失败路径测试继续通过。资源声明、版本和 diff 检查通过。
+
+actionlint 1.7.12 对原有 concurrency.queue 报未知字段；这是工具尚未识别 [GitHub 已支持的 queue: max](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)。正式模板保留该设置；只在临时校验副本中省略该字段后，两个工作流的 actionlint 其余语法、表达式、跨工作流输入和 secret 检查通过。没有把未经处理的完整输入检查记作全绿。
+
+本地上游 tool_misuse ledger 对全部新拆分代码、工作流及说明文件均 completed；与前两轮相同，这不能替代线上指定版本报告。提交发布与线上结果待填写。

@@ -1,50 +1,16 @@
-# Template: .github/workflows/desktop-build.yml
-# Cross-platform Tauri build with signing, a draft release carrying latest.json,
-# and a portable Windows exe. Replace <App Title>/<AppName>. Pin action versions and
-# the Node major to whatever the SKILL.md "verify latest" step reports; never use
-# `lts/*`/`latest` for CI Node (it jumps lines without a reviewed upgrade).
-#
-# Secrets required for auto-update: TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD if the key
-# has one). GITHUB_TOKEN is built in. Remember: the release is a DRAFT — un-draft it
-# to actually roll the update out (releases/latest ignores drafts).
-#
-# SECRETS: the signing secrets above must be set as repository secrets before the first
-# tagged build. Without them the signing step fails and no updater artifacts (latest.json
-# + signatures) are produced. The private key is never committed to the repo.
-#
-# WHAT THIS WORKFLOW WRITES — project changes inside the runner's checkout:
-#   * package.json               — `npm pkg set version` (tag push only) sets its "version"
-#   * src-tauri/tauri.conf.json  — `yarn update-version` copies package.json's version in
-#   * the GitHub release         — the draft release and its installer assets
-# System package installation uses sudo on Linux runners; caches and temporary files
-# also live outside the checkout. Tag builds upload GitHub draft release assets.
-# It never modifies this installed template or the skill
-# that ships it: this file is COPIED into your project as
-# .github/workflows/desktop-build.yml, and that copy is yours to edit.
-#
-# One job creates or reuses a draft, then all matrix legs upload to that releaseId.
-# Published releases fail the draft preflight. Manual runs skip the draft and only build.
-# max-parallel serializes the action's read-modify-write of latest.json. Before manually
-# publishing, verify-draft checks the version, every supported platform and its asset.
-#  * Two inputs look tempting and mostly are not: uploadPlainBinary is documented for
-#    `--no-bundle` builds only, so it does not replace the portable-exe steps below when
-#    you also ship installers; updaterJsonPreferNsis switches latest.json's
-#    `windows-x86_64` key from the .msi to the NSIS setup.exe, which changes what already
-#    shipped users receive on their next update — decide that on its own, not in passing.
+# Copy to .github/workflows/desktop-build.yml. See release-workflow.md for setup.
 name: Build Desktop App
 env:
   DESKTOP_RELEASE_MODE: manual
-
-on:
-  workflow_dispatch:
+'on':
+  workflow_dispatch: null
   push:
-    tags: ["v*"]
-
+    tags:
+      - v*
 concurrency:
   group: desktop-build-${{ github.ref }}
   cancel-in-progress: false
   queue: max
-
 jobs:
   draft:
     if: github.event_name == 'push'
@@ -60,24 +26,11 @@ jobs:
       TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v7
-        with: { ref: '${{ github.sha }}' }
+        with:
+          ref: ${{ github.sha }}
       - id: draft
         shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::Expected vX.Y.Z or vX.Y.Z-prerelease tag"; exit 1; }
-          matches=$(gh api --paginate --slurp "repos/$REPO/releases?per_page=100" |
-            jq -c --arg tag "$TAG" '[.[][] | select(.tag_name == $tag)]')
-          if [[ "$matches" == '[]' ]]; then
-            pre=(); [[ "$TAG" == *-* ]] && pre=(--prerelease)
-            gh release create "$TAG" -R "$REPO" --draft --verify-tag --title "$TAG" --generate-notes --notes "See CHANGELOG.md for details." "${pre[@]}"
-          else
-            jq -e 'length == 1 and .[0].draft' <<< "$matches" >/dev/null
-          fi
-          id=$(gh release view "$TAG" -R "$REPO" --json databaseId --jq .databaseId)
-          echo "id=$id" >> "$GITHUB_OUTPUT"
-          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
+        run: bash .github/scripts/ci/prepare-draft.sh
   publish-tauri:
     needs: draft
     if: ${{ !cancelled() && (needs.draft.result == 'success' || needs.draft.result == 'skipped') }}
@@ -85,202 +38,37 @@ jobs:
       contents: write
     strategy:
       fail-fast: false
-      max-parallel: 1  # latest.json is a shared read-modify-write asset
+      max-parallel: 1
       matrix:
         include:
-          - platform: "macos-latest" # Apple Silicon
+          - platform: macos-latest
             target: aarch64-apple-darwin
-            args: "--target aarch64-apple-darwin"
-          - platform: "macos-latest" # Intel
+            args: --target aarch64-apple-darwin
+          - platform: macos-latest
             target: x86_64-apple-darwin
-            args: "--target x86_64-apple-darwin"
-          - platform: "ubuntu-22.04"
+            args: --target x86_64-apple-darwin
+          - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            args: ""
-          - platform: "windows-latest"
+            args: ''
+          - platform: windows-latest
             target: x86_64-pc-windows-msvc
-            args: ""
-    runs-on: ${{ matrix.platform }}
-    steps:
-      - uses: actions/checkout@v7
-        with: { ref: '${{ needs.draft.outputs.commit || github.sha }}' }
-
-      # Root on the CI runner only. These two steps run INSIDE the GitHub Actions
-      # ubuntu-22.04 container, as root, on a throwaway VM that is deleted after the job.
-      # Nothing is installed on your machine, and no command here is ever run locally.
-      # Tauri's Linux build needs these system libraries (webkit2gtk, gtk3, …).
-      - name: Refresh apt package lists
-        if: matrix.platform == 'ubuntu-22.04'
-        run: sudo apt-get update
-
-      - name: Install Tauri Linux build dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf libgtk-3-dev
-
-      # Pin the major for reproducibility; desktop-app-standard's audit checks it
-      # against the nodejs/Release schedule.
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 26
-          cache: yarn
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "./src-tauri -> target"
-
-      # Make the git tag the single source of truth: on tag push, write the tag
-      # (minus the leading v) into package.json BEFORE update-version propagates it
-      # into tauri.conf.json. Then installer filenames, the embedded app version,
-      # and tagName: v__VERSION__ all equal the tag — no manual bumping. Manual
-      # workflow_dispatch (no tag) keeps the committed version. Do NOT instead point
-      # tagName at github.ref_name: installer names come from tauri.conf.json, not
-      # tagName, so you'd ship a release NAMED v3.0.1 full of 3.0.0 installers — and
-      # on workflow_dispatch github.ref_name is a branch name, not a version.
-      - name: Sync version from tag
-        if: github.event_name == 'push'
-        shell: bash
-        run: npm pkg set version="${GITHUB_REF_NAME#v}"
-
-      # Two steps, one command each, so each write is auditable on its own.
-      # update-version rewrites src-tauri/tauri.conf.json's "version" field from
-      # package.json — it must run before the build, not together with the install.
-      - name: Propagate package.json version into tauri.conf.json
-        run: yarn update-version
-
-      - name: Install frontend dependencies
-        run: yarn install --frozen-lockfile
-
-      - uses: tauri-apps/tauri-action@v1
-        id: tauri
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          # Tag push -> create or fill the draft release. Manual run -> build only:
-          # with no tagName the action skips every upload (its README's "just build"
-          # mode), so testing the pipeline cannot touch a real release.
-          releaseId: ${{ needs.draft.outputs.id }}
-          tagName: ${{ github.event_name == 'push' && 'v__VERSION__' || '' }}
-          releaseName: ${{ github.event_name == 'push' && '<App Title> v__VERSION__' || '' }}
-          # Prepended to GitHub's generated changelog; releaseName still wins for the title.
-          releaseBody: "See the assets to download and install."
-          generateReleaseNotes: true
-          releaseDraft: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          # A manual run uploads to no release, so the bundles are only reachable as
-          # workflow artifacts. On a tag push the release already carries them.
-          uploadWorkflowArtifacts: ${{ github.event_name != 'push' }}
-          # Four platforms x a dozen assets: one flaky upload otherwise costs a whole
-          # re-run, which v1's draft-matching rule makes more expensive than it was.
-          retryAttempts: 2
-          # One naming scheme for every asset. Without this Tauri's own names win, and a
-          # productName containing a space comes out dotted (Subtitle Translator ->
-          # Subtitle.Translator_3.1.1_x64-setup.exe) while the portable exe below, named
-          # from mainBinaryName, does not — three spellings of one app on one page.
-          # [ext] is multi-part aware (.app.tar.gz, .msi.sig), and latest.json resolves its
-          # download URLs through this same pattern, so the updater follows automatically.
-          # [_setup] expands to `_setup` on the NSIS bundle and to nothing on every other
-          # bundle, so the installer stays distinct from any other .exe tauri-action itself
-          # uploads. The portable exe below goes up through its own step, not this pattern.
-          # Drop this line to go back to the Tauri CLI's names.
-          releaseAssetNamePattern: "[mainBinaryName]_[version]_[arch][_setup][ext]"
-          args: ${{ matrix.args }}
-
-      # Portable exe (Windows only; WebView2 still required): the raw app binary tauri
-      # builds anyway. No installer; needs the WebView2 runtime; does NOT self-update.
-      # Version comes from the action's appVersion output — the version tauri actually
-      # built with (tauri.conf.json, written by `yarn update-version`). Re-reading
-      # package.json here would name the file and pick the upload tag from a different
-      # source, so drift between the two would put the asset on the wrong release.
-      # Three single-command steps: check the version, copy the binary, export the
-      # variable the later upload steps read.
-      - name: Verify the built app version is present
-        if: matrix.platform == 'windows-latest'
-        shell: bash
-        env:
-          APP_VERSION: ${{ steps.tauri.outputs.appVersion }}
-        run: test -n "$APP_VERSION"
-
-      - name: Copy the portable exe to a release-ready filename
-        if: matrix.platform == 'windows-latest'
-        shell: bash
-        env:
-          APP_VERSION: ${{ steps.tauri.outputs.appVersion }}
-        run: cp "src-tauri/target/release/<AppName>.exe" "<AppName>_${APP_VERSION}_x64_portable.exe"
-
-      - name: Export APP_VERSION for the upload steps
-        if: matrix.platform == 'windows-latest'
-        shell: bash
-        env:
-          APP_VERSION: ${{ steps.tauri.outputs.appVersion }}
-        run: echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
-
-      - name: Upload portable exe as workflow artifact
-        if: matrix.platform == 'windows-latest'
-        uses: actions/upload-artifact@v7
-        with:
-          name: portable-windows
-          path: <AppName>_${{ env.APP_VERSION }}_x64_portable.exe
-          if-no-files-found: error
-
-      - name: Attach portable exe to the release
-        if: matrix.platform == 'windows-latest' && github.event_name == 'push'
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "v${APP_VERSION}" "<AppName>_${APP_VERSION}_x64_portable.exe" --clobber
-
-
-      - name: Record this target's built assets
-        if: github.event_name == 'push'
-        shell: bash
-        env:
-          EXTRA_ARTIFACTS: ${{ matrix.platform == 'windows-latest' && format('["<AppName>_{0}_x64_portable.exe"]', steps.tauri.outputs.appVersion) || '[]' }}
-          ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}
-          APP_VERSION: ${{ steps.tauri.outputs.appVersion }}
-          TAG: ${{ github.ref_name }}
-          REPO: ${{ github.repository }}
-          TARGET: ${{ matrix.target }}
-          SOURCE_COMMIT: ${{ needs.draft.outputs.commit }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh api --paginate --slurp "repos/$REPO/releases/${{ needs.draft.outputs.id }}/assets?per_page=100" > "$RUNNER_TEMP/draft-assets.json"
-          gh release download "$TAG" -R "$REPO" -p latest.json -O "$RUNNER_TEMP/build-feed.json" --clobber
-          node .github/scripts/release-assets.mjs record
-      - uses: actions/upload-artifact@v7
-        if: github.event_name == 'push'
-        with:
-          name: tauri-evidence-${{ matrix.target }}
-          path: release-evidence/*.json
-          if-no-files-found: error
-          overwrite: true
-
-      # The pipeline ends in a manual step: the release is a DRAFT and the updater
-      # resolves `releases/latest`, which ignores drafts — so nothing reaches users until
-      # someone publishes it. Putting the link and that reminder in the run summary beats
-      # a note in a file nobody opens at the moment it matters. Skipped on manual runs,
-      # which create no release (the output is empty there).
-      - name: Link the draft release in the run summary
-        if: github.event_name == 'push' && steps.tauri.outputs.releaseHtmlUrl != ''
-        shell: bash
-        env:
-          RELEASE_URL: ${{ steps.tauri.outputs.releaseHtmlUrl }}
-          APP_VERSION: ${{ steps.tauri.outputs.appVersion }}
-        run: printf '### Draft release v%s\n\n[Open the draft release](%s)\n\nThis release is a **draft**. The updater resolves `releases/latest`, which\nignores drafts — publish it or no client will ever be offered this version.\n' "$APP_VERSION" "$RELEASE_URL" >> "$GITHUB_STEP_SUMMARY"
-
-
+            args: ''
+    uses: ./.github/workflows/tauri-build.yml
+    with:
+      runner: ${{ matrix.platform }}
+      target: ${{ matrix.target }}
+      build-args: ${{ matrix.args }}
+      draft-id: ${{ needs.draft.outputs.id }}
+      source-commit: ${{ needs.draft.outputs.commit }}
+      publish: ${{ github.event_name == 'push' }}
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
   verify-draft:
     if: github.event_name == 'push'
-    needs: [draft, publish-tauri]
+    needs:
+      - draft
+      - publish-tauri
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -296,20 +84,22 @@ jobs:
       TARGETS: aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v7
-        with: { ref: '${{ needs.draft.outputs.commit }}' }
+        with:
+          ref: ${{ needs.draft.outputs.commit }}
       - uses: actions/setup-node@v7
-        with: { node-version: 26 }
+        with:
+          node-version: 26
       - uses: actions/download-artifact@v8
-        with: { pattern: 'tauri-evidence-*', path: release-evidence, merge-multiple: true }
+        with:
+          pattern: tauri-evidence-*
+          path: release-evidence
+          merge-multiple: true
       - name: Verify draft contents before manual publication
         shell: bash
-        run: bash .github/scripts/verify-draft.sh
+        run: bash .github/scripts/ci/verify-draft.sh
       - name: SHA256SUMS from verified assets
         shell: bash
-        run: |
-          set -euo pipefail
-          cd dist
-          sha256sum -- * > SHA256SUMS
-          gh release upload "$TAG" -R "$REPO" SHA256SUMS --clobber
+        run: bash .github/scripts/ci/write-checksums.sh
       - uses: actions/attest@v4
-        with: { subject-checksums: dist/SHA256SUMS }
+        with:
+          subject-checksums: dist/SHA256SUMS
