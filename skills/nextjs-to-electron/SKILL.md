@@ -3,7 +3,7 @@ name: nextjs-to-electron
 description: Use when converting a Next.js static export into a Windows Electron desktop app, especially for offline machines without WebView2. Next.js 转 Windows Electron / 将 Next.js 静态导出打包成 exe. Confirm the project supports static export and Windows Electron is the intended target.
 
 metadata:
-  version: "1.1.15"
+  version: "1.1.17"
   openclaw:
     homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/nextjs-to-electron
     emoji: "⚛️"
@@ -17,25 +17,27 @@ metadata:
 
 ## Overview
 
-Wrap a **client-side** Next.js (App Router) static export in a thin Electron shell. Electron bundles its own Chromium, so unlike Tauri it needs **no system WebView2** — the reason to pick it for locked-down/intranet machines. Keep the web behavior intact and put shell-specific behavior in `electron/`. Make the source or configuration changes required for a working export.
+Wrap a **static-exportable** Next.js (App Router) app in a thin Electron shell. Electron bundles its own Chromium, so unlike Tauri it needs **no system WebView2** — the reason to pick it for locked-down/intranet machines. Keep the web behavior intact and put shell-specific behavior in `electron/`. Make the source or configuration changes required for a working export.
 
 **Core principle:** Serve the export over a custom `app://` protocol, NOT `file://`. Almost all migration pain is path/origin resolution, not React — and `file://` silently breaks both. (See [electron-files.md](electron-files.md) for all copy-paste code.)
 
 ## When to use
 
 - The app is (or can be) a **static export** (`output: "export"`) — diff/format/calculator/viewer tools, no SSR or API-at-runtime.
-- **Export prerequisites**: `output: "export"` in `next.config.*`, plus `images.unoptimized: true` when the app uses `next/image` — Next throws at export time otherwise ("Image Optimization using the default loader is not compatible with export"). That is a config line, not a source edit.
+- **Export prerequisites**: `output: "export"` in `next.config.*`. The default `next/image` optimizer needs a server; use `images.unoptimized: true` for the offline template, or retain an export-compatible custom loader after verifying its network requirements.
 - You want a Windows desktop build that runs **fully offline**, especially where WebView2 is absent (LTSC/Server images, air-gapped intranet) so Tauri won't launch.
 
 **Check platform and toolchain compatibility.** Confirm the target Windows version and architecture against the selected Electron release. Use a supported stable Electron line and compatible builder/updater versions from the project's package source; old release asset inventories do not establish current support.
 
 For CI, select a supported Node version that satisfies the build tools' engines. An explicit Active LTS major is a reproducible default; retain a deliberate project pin policy. `engines.node` expresses compatibility, not simply the CI version. See [Electron releases](https://releases.electronjs.org/releases.json) and the [Node schedule](https://raw.githubusercontent.com/nodejs/Release/main/schedule.json).
 
-**Do NOT use when** the app needs a live Node server at runtime (real API routes, SSR, server actions). **Prefer `nextjs-to-tauri`** when the targets have WebView2 and you want a ~3–10 MB exe with auto-update — Electron is ~150 MB because it ships Chromium.
+Runtime API routes, SSR and server actions need a separately assessed server/sidecar design. Consider `nextjs-to-tauri` when a system WebView is acceptable; measure package sizes from actual artifacts. Maintenance of an existing Electron app uses `desktop-app-standard` rather than repeating this migration.
 
-Use this playbook for Next.js static exports; other application types need their own packaging approach.
+Build-time Server Components and statically generated GET handlers can remain; do not convert them all to `"use client"`. Verify that their data is emitted into the export and does not need a runtime Next.js server. See [static-export support](https://nextjs.org/docs/app/guides/static-exports#supported-features).
 
 This playbook targets **Windows** (`--win dir`/`portable`, SmartScreen, WebView2-less boxes). macOS/Linux packaging (`.dmg`/`.AppImage`, notarization, codesigning) is out of scope.
+
+Local migration covers the necessary source/configuration changes. Remote tags, public releases and signing-service setup follow the user's authorized scope; a read-only assessment reports blockers and proposed checks without installing or building.
 
 ## Procedure
 
@@ -49,33 +51,37 @@ Adapt the following steps to the repository. Full code is in [electron-files.md]
    - `constants.js` — `SCHEME="app"`, `LOCALES[]`. `resolvePath.js` — `resolveAssetPath(outDir, pathname, exists)` with `.html`→`/index.html`→`404.html` fallback. `store.js` — dependency-free JSON store in `userData`. `locale.js` — `startUrl`/`parseLocale`/`trackLocale`. `window-state.js` — `createWindowStateKeeper`. (All pure → unit-tested.)
    - `protocol.js`, `tray.js`, `main.js` — the only files that import electron.
 
-4. **Load via the `app://` protocol, never `file://`** (gotcha #1). Before `app.ready`: `protocol.registerSchemesAsPrivileged([{scheme:"app", privileges:{standard:true, secure:true, supportFetchAPI:true}}])`. After ready: `protocol.handle("app", …)` mapping `app://local/<path>` → `resolveAssetPath` → `net.fetch(pathToFileURL(file))` (with a `.catch` returning a 404 Response). Load `app://local/` + the saved locale.
+4. **Register and handle `app://`** using [the protocol template](electron-files.md). Register privileges before ready, install the handler after ready, and load the saved locale. Preserve the path resolver and failure handling; retain context isolation, sandboxing and disabled Node integration for renderer content.
 
 5. **Wire the sample desktop features in main.js** (passive navigation/window events, gotchas #3, #4): single-instance lock + second-instance focus; restore window bounds from the store; `trackLocale(win, store)` persists locale on `did-navigate`; tray with close-to-tray via an `app.isQuitting` flag.
 
 6. **Package** (gotcha #6). `electron-builder.yml`: `extraResources` maps `out → out` and `build/icon.png → icon.png`; `main.js` reads them at `process.resourcesPath/out` and `/icon.png` when packaged. Choose target: `dir` (unpacked folder — runs `<AppName>.exe` directly, fast) vs `portable` (self-extractor, re-unzips to %TEMP% every launch, slower) — gotcha #11.
 
-7. **CI** (`.github/workflows/electron.yml`): `windows-latest` → setup-node → `yarn install --frozen-lockfile` → `yarn test:electron` → `yarn electron:build` → upload the build as an artifact. The workflow in electron-files.md pins each action to a major (`actions/checkout@v7`, `actions/setup-node@v7`, `actions/upload-artifact@v7`, `softprops/action-gh-release@v3`) and Node to a major — **check those are still current before trusting the template** (actions against their latest release, Node against the official schedule), e.g. `gh api repos/actions/checkout/releases/latest --jq .tag_name`. If desktop code lives on a side branch, tag its exact commit or use the committed source-map variant (gotcha #10). To also attach the build to a GitHub Release — e.g. alongside a Tauri release in the same tag — derive both the version and the zip name from the tag and `gh release upload` it; gotcha #12 lists the traps that silently produce an empty release, and electron-files.md describes the two-app variant in prose rather than as a template.
+7. **CI**: adapt the [bundled workflow](electron-files.md) to the actual lockfile and commands. It builds Windows artifacts; tag runs inject the version before build, create/reuse an unpublished draft, verify the ZIP, SHA256 and source commit, then publish automatically. Manual runs only upload workflow artifacts. Check the template's Action pins and Node version against the selected toolchain before adoption. For side branches or multiple apps, use its full-SHA source-map/coordinator guidance; do not overwrite an existing Tauri workflow or bypass the asset verifier with an ad hoc upload.
 
-8. **Verify:** `yarn test:electron` (pure modules), then `yarn electron:build` and run the unpacked `<AppName>.exe`. Verify UI behavior on Windows using the available automation or manual checks: rendering, i18n, persistence and tray lifecycle. A process-launch check alone does not prove those behaviors; test a WebView2-less environment when that is the deployment requirement.
+8. **Verify and deliver** using the checks below; distinguish pure-module tests from native Windows execution.
 
-## Gotchas (the non-obvious, hard-won ones)
+## Gotchas (diagnostic index)
 
-| # | Gotcha | Fix |
-|---|--------|-----|
-| 1 | **White screen / unstyled — the `file://` trap.** `win.loadFile("out/index.html")` makes absolute asset paths `/_next/...` resolve to the **filesystem root**, not the app dir → every asset 404s. `loadFile` does NOT rebase absolute paths. (Agents confidently claim it "resolves relative to the file" — it does not.) | Register a custom **`app://` standard+secure** scheme and serve `out/` via `protocol.handle`; `loadURL("app://local/")`. Absolute `/_next/...` then resolve against the protocol origin. Bonus: a stable custom-scheme origin makes `localStorage` (theme/locale via next-themes) persist reliably — `file://` storage behaviour is not something to rely on. |
-| 2 | **`trailingSlash:false` → flat files, no directory index.** Pages are `en.html`/`zh.html`, not `en/index.html`; a file/protocol server won't append `.html`. | Resolver fallback, for an extensionless request: `path + ".html"` → `path + "/index.html"` → `404.html` (a request that already has an extension is served if it exists, else `404.html`). Handles both trailingSlash modes. Use exact-segment matching so `zh-hant` isn't swallowed by `zh`. |
-| 3 | **Language not remembered across launches.** Static export has **no middleware**, so root `index.html` redirects to the *default* locale every launch — the web app cannot remember. | Persist locale in a **main-process** JSON store; launch with `loadURL("app://local/" + savedLocale)`; capture changes via `webContents.on("did-navigate", …)` parsing the locale segment from the URL. |
-| 4 | **Desktop changes break the web build.** | Prefer main-process navigation/window events for passive behavior. Add preload/IPC only for features that need it, expose a narrow API, and guard desktop-only paths so the browser build still works. |
-| 5 | **Pure tests import Electron or discover no tests.** | Keep path, locale and store logic independent of Electron-bound modules. The sample lists test files explicitly for shell portability; verify discovery on the project Node/shell before choosing a glob. |
-| 6 | **Packaged resource paths must match electron-builder; works in dev, white-screens packaged.** `main.js` uses `process.resourcesPath/out` and `/icon.png` when `app.isPackaged`. | `extraResources` must map `from: out → to: out` and `from: build/icon.png → to: icon.png` so the runtime paths line up. The static export is NOT in the asar — it's real files under `resources/`. |
-| 7 | **Web fonts hang offline.** A raw `<link href="fonts.googleapis.com">` fetches at runtime → FOUT/hang on an air-gapped box. | `next/font/google` self-hosts fonts into `_next/static/media` at **build** time (fine offline, as long as the CI build machine has internet). Self-host any other web fonts; never CDN-link them. |
-| 8 | **App can never quit / tray icon vanishes.** Close-to-tray that always `preventDefault`s traps the user; a `Tray` with no retained reference is garbage-collected and disappears. | Intercept window `close` → `preventDefault()`+`hide()` **UNLESS `app.isQuitting`**; only the tray "Quit" item sets `app.isQuitting=true` then `app.quit()`. Assign the `Tray` to a variable that outlives setup. |
-| 9 | **Relaunch spawns duplicate windows.** | `app.requestSingleInstanceLock()`; `app.quit()` if not primary; on `second-instance` restore/show/focus the existing window. |
-| 10 | **`workflow_dispatch` button missing.** GitHub only shows "Run workflow" if the workflow file is on the **default branch**. Keeping the desktop build on a side branch hides the button. | Keep a workflow on the default branch for the manual button. Release builds use the triggering tag commit, or a full source SHA recorded in that tag's source map. Keep a workflow in every commit that can receive a release tag. Keep it separate from any existing Tauri/desktop workflow rather than overwriting it. |
-| 11 | **`portable` exe is slow to start; unsigned exe warns.** electron-builder `portable` = a self-extractor that re-unzips to %TEMP% on **every** launch. And any unsigned build trips Windows SmartScreen "unknown publisher". | For intranet, `target: dir` → `win-unpacked/` runs `<AppName>.exe` directly (no per-launch extraction). Distribute the folder (zip for transport; GitHub auto-zips an uploaded folder artifact). SmartScreen needs a code-signing cert to silence — usually acceptable internally. |
-| 12 | **Tag workflows build mismatched versions or attach no assets.** | Ensure the tagged commit contains the workflow and trigger. Inject or assert the tag version before building, derive asset names from that version, and upload to the same tag. For multiple apps, use the fixed-source coordinator variant in [electron-files.md](electron-files.md); adapt its draft/publish policy to the repository. |
+The [copy-paste templates](electron-files.md) own the implementation; keep these numbers when following their inline references.
+
+| # | Symptom | Check |
+| --- | --- | --- |
+| 1 | White screen or unstyled page | `file://` resolves `/_next/...` at the filesystem root. Use the procedure's standard, secure `app://` origin; it also gives storage a stable origin. |
+| 2 | Flat export route 404 | Preserve the resolver's `.html`, directory-index and 404 fallbacks, with exact locale segments so `zh-hant` is not parsed as `zh`. |
+| 3 | Locale resets | Static export has no middleware; enter the saved locale and persist explicit navigation in the main-process store. |
+| 4 | Desktop integration breaks web | Prefer passive main-process events. Add narrow, guarded preload/IPC only for features that require it. |
+| 5 | Tests import Electron or discover zero cases | Keep pure modules independent and verify discovery on the actual Node/shell; the example lists files explicitly. |
+| 6 | Development works, packaged app fails | Match `extraResources` with `process.resourcesPath` and preserve the full unpacked folder. Packaging and ignore-rule examples are in the template. |
+| 7 | Fonts hang offline | Self-host runtime fonts. `next/font/google` downloads at build time, so the build environment still needs access. |
+| 8 | Tray disappears or app cannot quit | Retain the Tray reference and verify quit-flag and failed-tray fallbacks in `main.js`. |
+| 9 | Second launch duplicates windows | Verify the single-instance lock and restore/show/focus path. |
+| 10 | Manual workflow button is absent | Keep the workflow on the default branch for the button, and in each release-tag commit for tag-triggered builds. |
+| 11 | Portable startup is slow or unsigned builds warn | `portable` re-extracts each launch; the unpacked-folder target avoids that cost. Disclose signing state; a certificate alone does not guarantee a particular SmartScreen result. |
+| 12 | Release is empty or versions mismatch | Build the tag or its committed full source SHA, derive version/asset names from that tag, and verify current files before upload. See the template's multi-app source-map variant and publication policy. |
 
 ## Delivery
 
-Provide the runnable Windows package, the shell tests and UI checks actually performed, and any remaining environment limits. Package size depends on Chromium, dependencies and resources; use the generated release assets for exact sizes.
+Run the pure-module tests and build the package, then launch the unpacked Windows app. Exercise rendering, locale persistence, window state, single-instance behavior, tray close/reopen and actual quit. Test a WebView2-less environment when required, and verify offline assets without assuming CI network access proves offline operation.
+
+Deliver the runnable package, tests and UI checks actually performed, measured asset sizes and remaining environment limits. A build or process launch alone does not prove those behaviors.
