@@ -97,11 +97,29 @@ ClawHub 发布工具的自动 latest 策略不变。这与 html-shot 面向使�
 
 2026-11-15，修复提交 [ed69ac6](https://github.com/rockbenben/aishort-skills/commit/ed69ac64f67ebbb3c9da33f69ae62ece0f6c5f0a) 已推送到 main。[发布 CI](https://github.com/rockbenben/aishort-skills/actions/runs/43713068809) 中两个发布 job 均成功，随后等待并读取指定版本的扫描结果，核对官方审计页面。
 
-| Skill | 新版本 | 最终安全判定 | 官方审计页 | 底层 Skillspector 条目 |
+| Skill | 新版本 | 最新复查安全判定 | 官方审计页 | 底层 Skillspector 条目 |
 | --- | --- | --- | --- | --- |
-| md-web | 1.3.11 | clean / benign，security.passed=true | [Pass](https://clawhub.ai/rockbenben/skills/md-web/security-audit) | 9 → 8 |
+| md-web | 1.3.11 | suspicious，security.passed=false | [Review](https://clawhub.ai/rockbenben/skills/md-web/security-audit) | 9 → 8 |
 | html-shot | 1.2.8 | clean / benign，security.passed=true | [Pass](https://clawhub.ai/rockbenben/skills/html-shot/security-audit) | 15 → 13 |
+| nextjs-to-tauri | 1.1.19（本轮未重新发布） | suspicious，security.passed=false | [Review](https://clawhub.ai/rockbenben/skills/nextjs-to-tauri/security-audit) | 19 |
 
-结果来自对应版本的 scan 与 verify API，而非旧版本缓存。两个审计页显示的版本分别为 1.3.11 和 1.2.8。html-shot 的最终安装机制维度为 OK；md-web 的指令范围维度为 OK。底层仍有解析覆盖不足和未被最终审核确认的提示，因此 Pass 不等于所有扫描器零告警或完整安全证明。
+结果来自对应版本的 scan 与 verify API，并再次核对当前审计页面。之前两个包曾在 2026-11-15 20:25（北京时间）都显示 Pass，但不能据此称为稳定的最终结果。md-web 的服务端判定随后发生变化，见下节；html-shot 当前保持 Pass。底层仍有解析覆盖不足和未被最终审核确认的提示，Pass 不等于所有扫描器零告警或完整安全证明。
 
-verify API 的总 decision 仍为 fail，唯一 reason 为 card.missing；这与其中 security.passed=true 是不同字段。该 reason 表示生成卡片缺失，不是安全审计失败，官方安全审计页已明确显示 Pass。本轮未将卡片生成作为额外发布动作处理。
+目前 md-web 的 verify reasons 为 card.missing 与 security.status_not_clean，nextjs-to-tauri 为 security.status_not_clean；两者确实没有通过安全审核。html-shot 的 security.passed=true，总 decision 仍因 card.missing 为 fail；卡片缺失与安全状态是不同字段。
+
+## Pass 后发生审核状态更新：更正此前结论
+
+用户指出 Review 后重新核实，同一个 md-web@1.3.11 的扫描快照变化如下：
+
+| API checkedAt | 北京时间 | security.status | security.verdict |
+| --- | --- | --- | --- |
+| 1794745541695 | 2026-11-15 20:25:41.695 | clean | benign |
+| 1794745689850 | 2026-11-15 20:28:09.850 | suspicious | suspicious |
+
+两次相隔 148.155 秒，artifact SHA256 均为 `37e60165e08aa6f952008d6046c4ecb21d40619e5006ca7f6f29c26fd186a3b2`。这证实服务端对同一版本、同一内容更新了审核结论，不是用户缓存，也不是这段时间又发布了代码。之前将首次出现的 Pass 宣布为最终完成，结论过早。
+
+md-web 最新 LLM concern 具体引用 AE1：upload.js 未被完整解析，因此无法确认所有能力均与用途相符。其余 7 条 Skillspector 提示内部 review 均为 disagreed，A.I.G results 为空。当前未发现因此新增的、已经确认的源码执行漏洞；解析缺口仍然需要审查，不能把它直接算作已安全。
+
+nextjs-to-tauri@1.1.19 的 concern 也引用部分文件未完整解析，原因包括 static_parse_limit、opaque_content、obfuscated_instruction_text。原有 CI sudo、应用更新、固定摘要文件清理等提示被内部复核否定，当前仍被最终 LLM 标为 Review。
+
+本轮只更正记录，不再靠修改无关说明或重复发布来推定会通过。后续应保留同版本前后状态、原始扫描结果和源码依据，请 ClawHub 维护方核查审核更新及解析限制。尚未发送外部申诉。
