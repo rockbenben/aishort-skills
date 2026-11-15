@@ -77,4 +77,21 @@ md-web 1.3.12 的 clean / Pass 已连续观察超过五分钟；截至本轮完�
 
 actionlint 1.7.12 对原有 concurrency.queue 报未知字段；这是工具尚未识别 [GitHub 已支持的 queue: max](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)。正式模板保留该设置；只在临时校验副本中省略该字段后，两个工作流的 actionlint 其余语法、表达式、跨工作流输入和 secret 检查通过。没有把未经处理的完整输入检查记作全绿。
 
-本地上游 tool_misuse ledger 对全部新拆分代码、工作流及说明文件均 completed；与前两轮相同，这不能替代线上指定版本报告。提交发布与线上结果待填写。
+本地上游 tool_misuse ledger 对全部新拆分代码、工作流及说明文件均 completed；与前两轮相同，这不能替代线上指定版本报告。
+
+提交 55f7c2a 已推送，[CI 43720834865](https://github.com/rockbenben/aishort-skills/actions/runs/43720834865) 全部通过，于 2026-11-15T13:51:49Z 成功提交 nextjs-to-tauri 1.1.22 发布，无 Forbidden。
+
+同一包的服务端结论随后发生变化：
+
+| checkedAt（UTC） | 综合结论 | 原始提示数 |
+| --- | --- | --- |
+| 2026-11-15T13:59:21.202Z | suspicious / Review | 8 |
+| 2026-11-15T14:01:55.603Z | clean / Pass，medium confidence | 8 |
+
+两次均为 SHA-256 `bf2b07a9eb93ed1320df0faad915105696a33eb44fa6be9785d35a23dd234777`，并非再次上传了不同代码。完整报告和首次摘要相隔约 154 秒，再次说明首次可见标签不是可靠的最终判断。
+
+完整报告的解析结果：20 个组件中 13 个完成、7 个 partial。两个工作流、6 个 Bash 脚本均不再有静态解析异常，原 desktop-build.yml 的 static_parse_limit 消失；但入口 release-assets.js 和 release-assets/ 下 6 个 JS 模块仍有 tool_misuse 的 opaque_content。拆分尚未解决服务端 JavaScript 解析限制，不能把 AE1 提示消失当成所有代码完整解析。所有模块仍明文随包发布，并在元数据和复制清单中明确列出。
+
+8 条静态/语义提示均有 llm_review_outcome: disagreed：应用自更新 1 条、工具范围 1 条、crates.io 元数据请求 1 条、CI sudo 3 条，以及脚本中远程 SHA256SUMS 覆盖和临时 JSON 覆盖各 1 条。后两条在首次摘要中曾被作为担忧，完整复核结合工作流上下文后不同意：前者是已验证草稿的可重跑生成物，后者是 RUNNER_TEMP 中本轮重新下载的元数据；复制说明已披露这些写入用途。没有为消除提示删掉 --clobber 或去掉校验，也没有引入额外确认步骤改变 CI 行为。AIG 无发现。
+
+原始证据：[1.1.22 scan](https://clawhub.ai/api/v1/skills/nextjs-to-tauri/scan?version=1.1.22)、[完整 verify](https://clawhub.ai/api/v1/skills/nextjs-to-tauri/verify?version=1.1.22)。2026-11-15T14:03:30Z 至 14:08:50Z 连续观察超过五分钟，clean 和 checkedAt 均未再变化。此为本轮观察结果，不代表未来不会重新审核，也不将 Pass 等同于全量静态解析完成。
