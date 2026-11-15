@@ -171,7 +171,39 @@ function parseLifecycleConfiguration(xml) {
   return { opening: xml.slice(root.start, root.openEnd).replace(/\/>$/, ">"), rules: kept, extras: extras.trim(), hadRules: rules.length > 0 };
 }
 
-module.exports = { createPublishHelpers, parseLifecycleConfiguration };
+// Create the destination with private permissions before writing any credentials.
+// Never copy a permissive source mode or overwrite a concurrent migration.
+function migrateConfig(source, destination, io = fs, platform = process.platform) {
+  var directory = path.dirname(destination);
+  io.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  var stat = io.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("config directory must be a real directory");
+  if (platform !== "win32" && typeof process.getuid === "function" && stat.uid !== process.getuid())
+    throw new Error("config directory must belong to the current user");
+  if (platform !== "win32") io.chmodSync(directory, 0o700);
+  var fd;
+  try { fd = io.openSync(destination, "wx", 0o600); }
+  catch (error) { if (error.code === "EEXIST") { secureConfigFile(destination, io, platform); return; } throw error; }
+  try {
+    io.writeFileSync(fd, io.readFileSync(source));
+  } catch (error) {
+    io.closeSync(fd);
+    io.unlinkSync(destination);
+    throw error;
+  }
+  io.closeSync(fd);
+}
+
+function secureConfigFile(file, io = fs, platform = process.platform) {
+  var stat = io.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("config must be a regular file");
+  if (platform !== "win32") {
+    if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error("config must belong to the current user");
+    io.chmodSync(file, 0o600);
+  }
+}
+
+module.exports = { createPublishHelpers, parseLifecycleConfiguration, migrateConfig };
 
 // Importing exposes helpers without reading config or starting an upload.
 if (require.main === module) {
@@ -197,7 +229,7 @@ if (require.main === module) {
   var usage = [
     "Usage:",
     "  node " + SCRIPT_NAME + " <local-file> <remote-key>   publish one markdown document",
-    "  node " + SCRIPT_NAME + " " + SETUP_FLAG + "                 provision the viewer (first run, and after an upgrade)",
+    "  node " + SCRIPT_NAME + " " + SETUP_FLAG + " --confirm-shared-writes   replace shared viewer files and apply configured retention",
   ].join("\n");
 
   if (args[0] === "--help" || args[0] === "-h") {
@@ -205,9 +237,9 @@ if (require.main === module) {
     process.exit(0);
   }
   var isSetup = args[0] === SETUP_FLAG;
-  if (isSetup && args.length > 1) {
+  if (isSetup && (args.length !== 2 || args[1] !== "--confirm-shared-writes")) {
     console.log(usage);
-    console.error('UPLOAD_FAILED: ' + SETUP_FLAG + ' takes no other arguments, got: ' + args.slice(1).join(" "));
+    console.error('UPLOAD_FAILED: ' + SETUP_FLAG + ' requires --confirm-shared-writes after authorization to replace shared viewer files and apply configured retention.');
     process.exit(1);
   }
   if (!isSetup) {
@@ -246,31 +278,35 @@ if (require.main === module) {
   if (fs.existsSync(USER_CONFIG_PATH)) {
     CONFIG_PATH = USER_CONFIG_PATH;
   } else if (fs.existsSync(LOCAL_CONFIG_PATH)) {
-    // Migrate: copy old files to new location so future upgrades are safe
+    // Migrate credentials without a world-readable intermediate copy.
     try {
-      fs.mkdirSync(USER_CONFIG_DIR, { recursive: true, mode: 0o700 });
-      fs.copyFileSync(LOCAL_CONFIG_PATH, USER_CONFIG_PATH);
-      // The copy carries the source's mode bits, so tighten it right away: the
-      // secret must never sit world-readable, not even for a moment.
-      try { fs.chmodSync(USER_CONFIG_PATH, 0o600); } catch (_) {}
-      if (fs.existsSync(LOCAL_DEPLOYED_FLAG)) {
-        fs.copyFileSync(LOCAL_DEPLOYED_FLAG, path.join(USER_CONFIG_DIR, ".deployed"));
-      }
+      migrateConfig(LOCAL_CONFIG_PATH, USER_CONFIG_PATH);
       CONFIG_PATH = USER_CONFIG_PATH;
+      if (fs.existsSync(LOCAL_DEPLOYED_FLAG)) {
+        // This is only a deployment hint; failure must not invalidate credentials.
+        try { fs.copyFileSync(LOCAL_DEPLOYED_FLAG, path.join(USER_CONFIG_DIR, ".deployed"), fs.constants.COPYFILE_EXCL); } catch (_) {}
+      }
       console.log("Config migrated to: " + USER_CONFIG_PATH);
-    } catch (_) {
-      CONFIG_PATH = LOCAL_CONFIG_PATH;
+    } catch (error) {
+      console.error("CONFIG_INVALID: secure credential migration failed (" + (error.code || "invalid directory") + "). Fix the private config directory before retrying.");
+      process.exit(1);
     }
   } else {
     CONFIG_PATH = USER_CONFIG_PATH;
   }
 
-  // .deployed follows the same directory as config — if migration failed and we
-  // fell back to skill dir, .deployed stays in skill dir too.
+  // The deployment hint follows the active private config directory.
   var DEPLOYED_FLAG = path.join(path.dirname(CONFIG_PATH), ".deployed");
 
   // ── Load Configuration ──
   var CONFIG;
+  if (fs.existsSync(CONFIG_PATH)) {
+    try { secureConfigFile(CONFIG_PATH); }
+    catch (error) {
+      console.error("CONFIG_INVALID: cannot make the credential file owner-only (" + (error.code || "permission failure") + ").");
+      process.exit(1);
+    }
+  }
   try {
     CONFIG = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
   } catch (e) {
@@ -289,9 +325,6 @@ if (require.main === module) {
   // 0644, i.e. readable by every account on the machine; 0600 is the difference
   // between "only me" and "everyone", and it costs one call. Windows ACLs are not
   // chmod, so this is POSIX-only — the env vars above are the portable answer.
-  if (process.platform !== "win32") {
-    try { fs.chmodSync(CONFIG_PATH, 0o600); } catch (_) {}
-  }
   var missing = REQUIRED.filter(function (k) { return !CONFIG[k]; });
   if (missing.length) {
     console.error("Missing config fields: " + missing.join(", "));

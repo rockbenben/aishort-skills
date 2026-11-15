@@ -45,7 +45,7 @@ The complete list of what this skill does. Nothing outside it happens.
 
 - **Publishing one document** writes **exactly one object** — `md-web/<timestamp>-<slug>-<suffix>.md`
   — under the `md-web/` prefix of your bucket. It writes nothing else and deletes nothing.
-- **Provisioning the viewer** (`--setup`) is a **separate command**, never a side effect of
+- **Provisioning the viewer** (`--setup --confirm-shared-writes`) is a **separate command**, never a side effect of
   publishing. It uploads `assets/<bundle-hash>/`, updates root `README.md`, then
   conditionally replaces root `index.html`. These are shared viewer files; old
   assets remain available to cached pages and existing document URLs stay unchanged.

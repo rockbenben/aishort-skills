@@ -3,7 +3,7 @@ name: md-web
 description: Use when the user explicitly asks to publish Markdown online or obtain a public share link through their S3 bucket. 发布 Markdown / 生成公开分享链接 / /md-web. Reads ~/.md-web/config.json. Viewer setup overwrites bucket-root files; optional expire_days manages retention. Local preview uses a local tool.
 
 metadata:
-  version: "1.3.9"
+  version: "1.3.10"
   openclaw:
     homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/md-web
     emoji: "🌐"
@@ -68,10 +68,10 @@ node "{SKILL_DIR}/upload.js" <local-file> <remote-key>
 - If stderr contains `SETUP_REQUIRED`, **follow the viewer-setup authorization rule above** — `--setup` rewrites shared bucket-root files — then run setup and retry the same publish command:
 
   ```bash
-  node "{SKILL_DIR}/upload.js" --setup
+  node "{SKILL_DIR}/upload.js" --setup --confirm-shared-writes
   ```
 
-  Setup performs the shared writes listed above and applies `expire_days`; both authorization rules still apply. Run it on first use, after a viewer upgrade, after changing `bucket` / `endpoint`, or when the active viewer differs. Existing document URLs stay unchanged. Retention changes also need setup, but publishing does not detect them; changing `public_url` only changes the printed link.
+  The required `--confirm-shared-writes` flag records the already obtained setup/retention authorization; never add it merely to bypass a missing-confirmation error. Setup performs the shared writes listed above and applies `expire_days`; both authorization rules still apply. Run it on first use, after a viewer upgrade, after changing `bucket` / `endpoint`, or when the active viewer differs. Existing document URLs stay unchanged. Retention changes also need setup, but publishing does not detect them; changing `public_url` only changes the printed link.
 - `SETUP_CONFLICT` means a concurrent setup changed the entry point or the provider did not return an ETag. Inspect the active viewer before retrying; do not automatically overwrite it. Setup requires S3 conditional object writes (`If-Match` / `If-None-Match`); unsupported providers fail without an unconditional fallback. An upgrade from the old flat-asset layout requires one explicit setup; old flat assets and version directories are not deleted.
 - `Warning: lifecycle —` means retention was not confirmed even if viewer setup succeeded. Follow the detail: a permission error may require lifecycle access or a provider-dashboard change; unsupported XML, a rule conflict or concurrent edit requires inspecting the actual policy. Do not treat every warning as a reason to broaden credentials.
 - Lifecycle administration has no atomic per-rule update: serialize it with other administrators. Setup re-reads before replacing the policy and warns on a detected edit, unsupported/incomplete XML, or a conflicting rule ID. Policy writes are not automatically retried; a warning does not mean the requested retention took effect. A narrow race remains between the final read and write.
@@ -101,7 +101,7 @@ node "{SKILL_DIR}/upload.js" <local-file> <remote-key>
 
    Secrets should not travel through chat if avoidable: offer that the user writes `config.json` themselves, or omits the two keys and exports `MD_WEB_ACCESS_KEY` / `MD_WEB_SECRET_KEY` instead (the file wins when both are set).
 3. Optional: `region` (default `auto`; AWS needs the real region, e.g. `us-east-1`) and `expire_days` (auto-delete uploads after N days; `0` removes the rule). **Omit `expire_days` unless the user asks for auto-expiry**. Lifecycle administration needs provider-specific bucket permissions: R2 uses [Admin Read & Write](https://developers.cloudflare.com/r2/api/tokens/#permissions), while AWS uses [lifecycle IAM permissions](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketLifecycleConfiguration.html), not an R2 token label. The script only edits its own `md-web/` rule and preserves other rules.
-4. Write `~/.md-web/config.json` (create the directory; on macOS/Linux the script tightens the file to owner-only access — mode `0600` — as the user who ran it; it never asks for root and never needs elevated privileges):
+4. Write `~/.md-web/config.json` (create the directory; on macOS/Linux create the directory with mode `0700` and the file with mode `0600` before writing secrets; the script also checks owner-only file access; it never asks for root and never needs elevated privileges):
 
 ```json
 {
@@ -118,6 +118,6 @@ node "{SKILL_DIR}/upload.js" <local-file> <remote-key>
 
 ## Security & privacy
 
-Credentials are plaintext in `~/.md-web/config.json` unless supplied through the environment. The script applies owner-only file permissions on macOS/Linux. Keep credentials out of version control and shared output; a dedicated bucket limits the impact of setup and administration.
+Credentials are plaintext in `~/.md-web/config.json` unless supplied through the environment. Migration creates the destination with mode `0600` before writing credentials and tightens its dedicated directory to `0700` on macOS/Linux. Permission failures stop the command. Windows chmod does not enforce ACLs: use a private user directory or environment credentials. Keep credentials out of version control and shared output; a dedicated bucket limits the impact of setup and administration.
 
 The viewer accepts inline HTML. Its CSP blocks inline scripts and the route guard loads same-origin documents under `md-web/`, but neither sanitizes page elements. Review unfamiliar markup and treat published pages as untrusted content. Document language is preserved.

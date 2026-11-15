@@ -91,7 +91,7 @@ async function runSetup(config, s3) {
       module: { exports: {} }, exports: {},
       __dirname: SKILL_DIR, __filename: UPLOAD_JS,
       process: {
-        argv: ["node", UPLOAD_JS, "--setup"], platform: process.platform, env: {},
+        argv: ["node", UPLOAD_JS, "--setup", "--confirm-shared-writes"], platform: process.platform, env: {},
         exitCode: 0, exit(code) { throw new Error(`upload.js exited with ${code}`); },
       },
       console: { log: (...a) => out.push(a.join(" ")), error: (...a) => out.push(a.join(" ")) },

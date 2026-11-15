@@ -45,7 +45,7 @@ class Bucket {
   }
 }
 
-async function runUpload({home, bundle}, bucket, args = ['--setup']) {
+async function runUpload({home, bundle}, bucket, args = ['--setup', '--confirm-shared-writes']) {
   const output = [];
   const fakeHttps = {
     Agent: class { destroy() {} },
