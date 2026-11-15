@@ -20,10 +20,10 @@
 clawhub install html-shot
 
 # skills.sh（Vercel skills CLI —— 适用于 Claude Code、Cursor 等）
-npx skills add rockbenben/aishort-skills --skill html-shot
+npx skills@1.8.1 add rockbenben/aishort-skills --skill html-shot
 ```
 
-`--skill html-shot` 只安装这个技能。需要可复现安装时，用 `skills@<version>` 固定已核对的 CLI 版本；不指定版本则安装包源当前版本。
+`--skill html-shot` 只安装这个技能。示例选择安装器版本 1.8.1；更新版本前先核对该安装器的变更。这只选择安装器版本，技能内容仍来自源仓库，不代表技能代码也固定到某个提交。
 
 或手动安装 —— clone 本仓库，把 `skills/html-shot/` 目录拷贝（或软链）进你的 agent 读取的
 skills 目录即可，只要是一个名为 `html-shot` 的目录，具体路径按你的 agent 文档来。

@@ -20,11 +20,12 @@ Pick whichever matches your agent / CLI:
 clawhub install html-shot
 
 # skills.sh (Vercel skills CLI — Claude Code, Cursor, and more)
-npx skills add rockbenben/aishort-skills --skill html-shot
+npx skills@1.8.1 add rockbenben/aishort-skills --skill html-shot
 ```
 
-`--skill html-shot` installs only this skill. For reproducible installation, pin a reviewed
-CLI version with `skills@<version>`; otherwise the command resolves the current registry version.
+`--skill html-shot` installs only this skill. The example selects installer version 1.8.1;
+review a newer installer release before changing that version. This selects the installer,
+not a fixed revision of the skill content, which still comes from the source repository.
 
 Or install manually — clone this repo and copy (or symlink) the `skills/html-shot/` folder
 into the skills directory your agent reads from. A single folder named `html-shot` is all

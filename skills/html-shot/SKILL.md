@@ -2,7 +2,7 @@
 name: html-shot
 description: Render trusted HTML/SVG or a requested page to PNG/JPEG/WebP with Chromium, or convert a local raster/vector source into favicon/app-icon sets (.ico, .icns, apple-touch, PWA). Covers OG cards, transparent badges, element/full-page screenshots, Next, Electron and Tauri icons. Triggers on HTML 转图片, SVG 转 PNG, favicon, 应用图标. Raster retouching uses an image editor.
 metadata:
-  version: "1.2.7"
+  version: "1.2.8"
   openclaw:
     homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/html-shot
     emoji: "📸"

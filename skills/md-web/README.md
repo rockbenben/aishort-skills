@@ -37,7 +37,7 @@ it needs; use whichever path your agent documents.
 3. The AI then provisions the viewer once — a separate step that writes the page shell
    and its assets to your bucket, and again after an upgrade of the viewer. This
    requires authorization covering the shared files at the bucket root.
-4. After that, tell the AI "share as a link" whenever you want to publish content as a web page
+4. After that, ask the AI to publish that document to your public bucket
 
 ## What this touches
 
@@ -125,11 +125,12 @@ instead. The config file wins when both are set, so an existing setup keeps work
 Uploaded content is **publicly accessible** via the generated URL. The skill only runs when you explicitly ask for it, and the AI tells you the link is public before it uploads anything:
 
 ```text
-show as a web page
-publish this online
+publish this Markdown to my public bucket
+create a public web link for this document
 /md-web path/to/file.md
-share as a link
 ```
+
+A generic request to share an existing URL, create a private link, or preview locally does not authorize a public upload. If the sharing destination or public scope is unclear, clarify it before uploading.
 
 The AI returns a link — click to view the rendered document in your browser.
 

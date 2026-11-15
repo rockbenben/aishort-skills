@@ -3,7 +3,7 @@ name: md-web
 description: Use when the user explicitly asks to publish Markdown online or obtain a public share link through their S3 bucket. 发布 Markdown / 生成公开分享链接 / /md-web. Reads ~/.md-web/config.json. Viewer setup overwrites bucket-root files; optional expire_days manages retention. Local preview uses a local tool.
 
 metadata:
-  version: "1.3.10"
+  version: "1.3.11"
   openclaw:
     homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/md-web
     emoji: "🌐"
