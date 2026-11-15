@@ -12,11 +12,13 @@
 # tagged build. Without them the signing step fails and no updater artifacts (latest.json
 # + signatures) are produced. The private key is never committed to the repo.
 #
-# WHAT THIS WORKFLOW WRITES — all of it inside the runner's checkout of YOUR project:
+# WHAT THIS WORKFLOW WRITES — project changes inside the runner's checkout:
 #   * package.json               — `npm pkg set version` (tag push only) sets its "version"
 #   * src-tauri/tauri.conf.json  — `yarn update-version` copies package.json's version in
 #   * the GitHub release         — the draft release and its installer assets
-# It writes nothing outside that checkout. It never modifies this template or the skill
+# System package installation uses sudo on Linux runners; caches and temporary files
+# also live outside the checkout. Tag builds upload GitHub draft release assets.
+# It never modifies this installed template or the skill
 # that ships it: this file is COPIED into your project as
 # .github/workflows/desktop-build.yml, and that copy is yours to edit.
 #

@@ -3,7 +3,7 @@ name: nextjs-to-tauri
 description: Use when converting a Next.js 16 App Router static export into a Tauri 2 desktop app. Next.js 静态导出转 Tauri 2 / 打包 Next.js 为 Tauri 桌面应用. Covers native shell, tray, optional updater and GitHub Actions. Existing Tauri maintenance uses desktop-app-standard.
 
 metadata:
-  version: "1.1.18"
+  version: "1.1.19"
   openclaw:
     homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/nextjs-to-tauri
     emoji: "🦀"
@@ -43,7 +43,7 @@ Adapt these steps to the repository. Supporting files contain the configuration 
 
 Read-only assessment stops at findings and proposed checks. The bundled workflow verifies a draft before manual publication; `desktop-app-standard` has a separate direct-publication default. Preserve the requested release policy rather than mixing those workflows.
 
-**Package manager:** the commands and `desktop-build.yml` assume Yarn Classic. In an npm or pnpm repo substitute the equivalent (`npm ci` / `pnpm install --frozen-lockfile`, `npx tauri` / `pnpm tauri`) and change the workflow's `cache:` and install line — `cache: yarn` fails outright when there is no `yarn.lock`.
+**Package manager:** the commands and `desktop-build.yml` assume Yarn Classic. In an npm or pnpm repo substitute the equivalent (`npm ci` / `pnpm install --frozen-lockfile`, `npm exec --no -- tauri` / `pnpm tauri`) and change the workflow's `cache:` and install line — `cache: yarn` fails outright when there is no `yarn.lock`.
 
 1. **Verify target-compatible stable versions** (this playbook targets Tauri 2):
    - npm: query the published 2.x versions of `@tauri-apps/cli` and the plugins used, then confirm JS/Rust compatibility. An upstream `latest` in a higher major does not change this playbook's target.
