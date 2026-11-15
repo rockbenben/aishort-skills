@@ -24,7 +24,11 @@ export function assertNsisEnglish(file, text) {
         throw new Error('YAML parser unavailable: install the application dependencies or pass its effective builder JSON');
       }
     }
-    options = yaml.load(text)?.nsis;
+    // js-yaml 5 uses Core by default; retain the merge keys supported by builder
+    // configurations under v4 without enabling YAML 1.1 boolean coercion.
+    const schema = yaml.CORE_SCHEMA?.withTags && yaml.mergeTag
+      ? yaml.CORE_SCHEMA.withTags([yaml.mergeTag]) : yaml.DEFAULT_SCHEMA;
+    options = yaml.load(text, {schema})?.nsis;
   }
   if (JSON.stringify(options?.installerLanguages) !== '["en_US"]' || options?.displayLanguageSelector !== false)
     throw new Error('NSIS requires installerLanguages: [en_US] and displayLanguageSelector: false in the effective builder config');
