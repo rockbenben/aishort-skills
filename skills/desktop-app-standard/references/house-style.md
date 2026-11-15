@@ -1,6 +1,6 @@
 # House style（默认做法）
 
-以下是本技能的新项目默认值。保留用户明确选择和已有项目约束；具体版本在新建或升级时按[依赖升级流程](upgrade-dependencies.md)查询并落地。
+以下是 Tauri/Electron 的默认选型；版本维护统一按[依赖升级流程](upgrade-dependencies.md)，沿用组件、包管理器或 pin 形式不代表冻结版本。用户明确选择、只读要求和已证实的兼容性约束优先。
 
 ## 优先级
 
@@ -25,7 +25,7 @@
 - Linux 构建用 ubuntu-22.04（较旧 glibc，兼容面更广）；只有依赖要求时才升级。
 - 安装包是正式产物；portable 只是便利。updater 指向的必须是可被替换的安装产物。
 - **安装包界面语言**：安装和卸载向导统一英文，自定义页面、按钮与提示文案也使用英文。语言列表仅保留英文并关闭语言选择器，避免随系统或应用语言切换。Tauri 在 `bundle.windows.nsis` 设置 `"languages": ["English"]`、`"displayLanguageSelector": false`；electron-builder 在 `nsis` 设置 `"installerLanguages": ["en_US"]`、`"displayLanguageSelector": false`。已有自定义 NSIS 脚本或 hook 时，同步核对实际生效的语言及文案。发布验收在中文 Windows 上运行安装和卸载向导，确认均为英文。[Tauri 配置](https://v2.tauri.app/reference/config/#nsisconfig)、[electron-builder NSIS 配置](https://www.electron.build/docs/api/app-builder-lib.interface.nsisoptions/)
-- **技术栈产物边界**：本表规范针对 Tauri 与 Electron（自动更新生态如 `electron-updater`、`@tauri-apps/plugin-updater` 均深度绑定 NSIS 安装包）。若是 WPF / .NET 原生桌面应用，其安装包与分发矩阵按 `wpf-desktop` 的「三轨分发矩阵（1. 免 UAC Inno Setup 安装包 + 2. 自包含便携 Zip + 3. 框架依赖精简 Zip）」执行，不在此处混用。
+- **技术栈产物边界**：本表只适用于 Tauri/Electron；WPF 的安装范围、权限及分发矩阵统一由 `wpf-desktop` 规定。Tauri/Electron 的便携形态也不直接套用安装器更新链，按实际包型验收。
 
 ## 工具链
 
@@ -37,12 +37,11 @@
   - Node 只是构建工具，不是应用运行时（Electron 内置 Node，版本由 Electron major 决定）。
 - **npm**：默认包管理器。CI 用 `npm ci`（锁文件入库，按 `integrity` 校验），本地用 `npm i`。锁文件是唯一事实来源。
   - Yarn / pnpm / bun 项目不强迁：脚本照样能读它们的锁文件。存量 Yarn 1 项目 CI 必须 `--frozen-lockfile`；需要迁移包管理器时，独立验证安装、缓存和锁文件行为。
-  - 新建和升级时直接更新已发布的兼容稳定版，阅读跨 major 的迁移说明，同步修改代码和锁文件并验证。
 - **Rust（Tauri）**：stable toolchain；Cargo.lock 入库；遵守目标 crate 的 MSRV。
 
 ## 框架选择（新应用）
 
-- **Tauri**：默认首选 Tauri 2。JS API 与 Rust core 同 major.minor，有 JS 绑定的官方插件用兼容 Tauri 2 的同一版本。
+- **Tauri**：默认首选 Tauri 2，JS／Rust 兼容组合统一按[Tauri 配套规则](tauri.md#版本配套)选择。
 - **Electron**：需要 Chromium 一致渲染、Node 生态或现有 Electron 代码时选用。打包用 **electron-builder + electron-updater**：它是三平台（含 Linux AppImage）都有自动更新的主流方案。Electron 官方默认推荐 Forge；已用 Forge 的项目继续用 Forge，不为风格迁移。
 - Electron 使用[技能目标表](version-targets.json)指定的 major，安装该线最新稳定版。上游支持窗口用来核查该目标能否继续获得补丁。
 - Electron、builder、updater 的版本独立。从实际使用的包源核对稳定通道，遇到 GitHub 标签领先时，确认目标包已发布且属于稳定线再安装。
@@ -78,7 +77,7 @@
 - 新项目默认使用 Action 大版本标签。升级项目时阅读最新稳定 major 的迁移说明，调整工作流和 runner 后验证，并保留项目原有的 pin 策略。
   - 项目要求完整 SHA 或精确版本时，更新到已核实的稳定 release 对应的提交或版本。
   - 产物写入类 Action 使用可移动标签时，审计会记为 `action-moving-ref` 提示。核对 release 创建、attestation 与上传步骤的权限。
-- 新项目默认由本技能在新建和升级时更新依赖。可沿用既有仓库的 Dependabot 配置。
+- 沿用既有仓库的 Dependabot 配置；已有自动更新配置不替代本次依赖升级和验证。
 
 ## 应用默认体验
 

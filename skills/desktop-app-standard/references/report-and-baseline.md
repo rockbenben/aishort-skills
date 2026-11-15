@@ -30,7 +30,7 @@
 
 路径关联采用 block-style workflow 的静态线索。表达式、目录／配置覆盖和 reusable workflow 需要人工核对；此时 `collectionComplete` 为 false。上游版本及 release 采集仍按组件汇总，逐应用配置和配对证据用于判断具体应用。
 
-原始报告、审计总结和基线均写进项目的 Git 忽略目录，例如 `desktop/release/audit-reports/YYYYMMDD/`；没有现成目录时建专用目录并加入 `.gitignore`，不堆在仓库根目录、不提交。已有未提交报告未经用户要求不批量删除；要整理时移入忽略目录。
+需要保留的报告、总结和基线放在 Git 忽略目录，例如 `desktop/release/audit-reports/YYYYMMDD/`；允许修改的任务可建立专用目录并加入 `.gitignore`。只读评估使用已有忽略目录、项目外临时目录或终端输出，不为保存报告修改项目文件。已有未提交报告不批量删除；用户要求整理时再移入忽略目录。
 
 基线可选，用于下次减少重复阅读 release；不需要跨次比较时只输出终端结果即可，不必每次产生文件。需要保留时，在同一忽略目录内使用 `.desktop-app-standard-review-YYYYMMDD.json` 作为新基线文件；先审阅 audit JSON，再显式 `--confirm-reviewed`。后续 `--since-baseline` 传入该文件的实际路径。脚本拒绝离线/采集失败/截断的报告和覆盖现有文件；不同项目路径不能复用。
 

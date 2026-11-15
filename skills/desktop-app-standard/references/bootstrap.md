@@ -32,7 +32,11 @@ Electron 新项目需要可执行入口：在 package.json 指定主进程文件
 - **Tauri**：capabilities 按窗口最小授权；只启用需要的插件；CSP 明确；Rust command 校验输入与路径。
 - **Electron**：`contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`；preload 用 `contextBridge` 暴露窄 API；限制导航/新窗口；启用适用的 fuses。
 
-## 4. 自动更新（第一天就接）
+## 4. 自动更新
+
+新应用默认接入在线更新；明确离线或手动更新的产品保留其选择，不安装无用 updater 或新增网络请求。已有应用沿用实际 provider、渠道与已安装客户端的信任链。
+
+禁用在线更新时，按[离线／手动更新的发布适配](release-flow.md#无在线更新的产品)同步修改模板；仅删除前端检查或插件会留下不匹配的 feed 门禁。
 
 - **Tauri**：`npm run tauri -- signer generate -w ~/.tauri/<app>.key`；公钥写入 `plugins.updater.pubkey`，endpoint 用 `https://github.com/<owner>/<repo>/releases/latest/download/latest.json`；`bundle.createUpdaterArtifacts: true`；私钥与密码存入 secrets `TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)`，离线备份——丢了旧用户就无法再更新。
 - **Electron**：electron-builder 配置 `publish: { provider: github }`；Windows target `nsis`，macOS `dmg`+`zip`，Linux `AppImage`+`deb`+`rpm`；主进程 `autoUpdater.checkForUpdatesAndNotify()`（electron-updater）。
@@ -54,6 +58,8 @@ Electron 新项目需要可执行入口：在 package.json 指定主进程文件
 模板里的 Action 标签和 Node 版本来自编写时的环境。复制后核实当前的稳定 release、Active LTS 及 runner 要求，实际更新工作流。随后执行 `node "{SKILL_DIR}/scripts/audit.mjs" "<repo>" --ci-only` 复查。直接发布和 token 权限见[发布流程](release-flow.md)。
 
 ## 7. 首次发布检查
+
+以下外部发布步骤按用户授权执行；本地迁移或只读评估不自动授权推送 tag、公开 Release 或配置 secrets。
 
 1. 运行审计，核对框架和 CI 发现。确认 tag 的版本源与测试门禁。
 2. 推送可信 tag，检查托管构建和直接发布结果。Tauri 矩阵逐平台补齐 Release，最终 latest.json 覆盖全部支持目标；Electron 单一发布器等待所有平台构建完成。
