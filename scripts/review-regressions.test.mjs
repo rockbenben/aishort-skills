@@ -325,7 +325,7 @@ test('registry failures cannot become an empty security report', () => {
   ]) {
     const result = mockedCommand('scripts/audit-warnings.mjs', `
       process.argv = ['node', 'audit-warnings.mjs', '--slug', 'md-web'];
-      globalThis.fetch = async url => url.includes('/api/v1/')
+      globalThis.fetch = async url => url.includes('/scan')
         ? Response.json({security: {scanners: {skillspector: {issueCount: 3}}}})
         : ${response};
     `);
@@ -344,12 +344,38 @@ test('registry distinguishes unavailable summary from confirmed zero findings', 
   assert.doesNotMatch(failed.stdout, /not published|findings: none/);
   const empty = mockedCommand('scripts/audit-warnings.mjs', `
     process.argv = ['node', 'audit-warnings.mjs', '--slug', 'md-web'];
-    globalThis.fetch = async url => url.includes('/api/v1/')
+    globalThis.fetch = async url => url.includes('/scan')
       ? Response.json({security: {scanners: {skillspector: {issueCount: 0, status: 'clean'}}}})
-      : new Response('<html>Security audit: no findings</html>');
+      : Response.json({security: {scannerReports: {skillspector: {issues: []}, aig: {runs: [{results: []}]}}}});
   `);
   assert.equal(empty.status, 0, empty.stderr);
   assert.match(empty.stdout, /findings: none/);
+});
+
+test('registry reads all version-pinned raw findings, including A.I.G, and rejects mismatched evidence', () => {
+  for (const mismatch of [false, true]) {
+    const result = mockedCommand('scripts/audit-warnings.mjs', `
+      process.argv = ['node', 'audit-warnings.mjs', '--slug', 'md-web'];
+      globalThis.fetch = async url => {
+        if (url.endsWith('/scan')) return Response.json({version: {version: '1.2.3'}, security: {
+          scanners: {skillspector: {issueCount: 2, status: 'suspicious'}}}});
+        if (!url.endsWith('/verify?version=1.2.3')) throw new Error('unexpected endpoint');
+        return Response.json({version: ${mismatch ? "'1.2.4'" : "'1.2.3'"}, security: {scannerReports: {
+          skillspector: {issues: [{pattern: 'public finding'}, {pattern: 'hidden finding'}],
+            analysis_completeness: {status: 'partial'}},
+          aig: {runs: [{results: [{ruleId: 'T09', message: {text: 'AIG finding'}}]}]}
+        }}});
+      };
+    `);
+    assert.equal(result.status, mismatch ? 2 : 0, result.stderr);
+    if (mismatch) assert.match(result.stderr, /version differs/);
+    else {
+      assert.match(result.stdout, /public finding/);
+      assert.match(result.stdout, /hidden finding/);
+      assert.match(result.stdout, /AIG finding/);
+      assert.match(result.stdout, /coverage: partial/);
+    }
+  }
 });
 
 test('viewer serves only regular files within its real root', async () => {

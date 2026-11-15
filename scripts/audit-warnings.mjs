@@ -2,10 +2,9 @@
 /**
  * Read the ClawHub security findings for every skill in this repo.
  *
- * The public REST API (/api/v1/skills/<slug>/scan) only carries the summary
- * (skillspector score + issueCount); the findings themselves are rendered by the
- * site from the loader payload, so the report is parsed out of the rendered
- * security-audit page.
+ * Read summary and version-pinned raw scanner reports from the public API.
+ * The website hides some low-confidence findings, so its card count is not the
+ * scanner's issue count and must not be used to decide whether reports are complete.
  *
  * Usage:
  *   node scripts/audit-warnings.mjs            # published versions
@@ -16,18 +15,7 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const REGISTRY = "https://clawhub.ai";
-const OWNER = "rockbenben";
 const VERBOSE = process.argv.includes("--verbose");
-
-const decode = (s) =>
-  s
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, "&");
-
-const stripTags = (s) => decode(s.replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim();
 
 const slugs = readdirSync(join(process.cwd(), "skills"), { withFileTypes: true })
   .filter((d) => d.isDirectory())
@@ -45,29 +33,28 @@ if (process.argv.includes("--slug") && slugs.length === 0) {
   process.exit(2);
 }
 
-const findingsOf = (html) => {
-  const out = [];
-  const blocks = html.split('<article class="static-analysis-finding">').slice(1);
-  for (const block of blocks) {
-    const title = stripTags(block.match(/agentic-risk-finding-title">(.*?)<\/h3>/)?.[1] ?? "?");
-    const severity = stripTags(block.match(/agentic-risk-finding-badges">(.*?)<\/div>/)?.[1] ?? "?");
-    const category = stripTags(block.match(/<dt>Category<\/dt><dd>(.*?)<\/dd>/)?.[1] ?? "?");
-    const confidence = stripTags(block.match(/<dt>Confidence<\/dt><dd>(.*?)<\/dd>/)?.[1] ?? "?");
-    const where = block.match(/Scanner excerpt (.*?) \(reported line (\d+)\)/);
-    const excerpt = block.match(/<code class="language-md">([\s\S]*?)<\/code>/)?.[1] ?? "";
-    const desc = block.match(/<dt>Finding<\/dt><dd[^>]*>([\s\S]*?)<\/dd>/)?.[1] ?? "";
-    out.push({
-      title,
-      severity,
-      category,
-      confidence,
-      file: where?.[1]?.trim() ?? "(no file)",
-      line: where?.[2] ?? "?",
-      description: stripTags(desc),
-      excerpt: stripTags(excerpt),
-    });
+const findingsOf = (verification) => {
+  const reports = verification?.security?.scannerReports;
+  const inspector = reports?.skillspector;
+  if (!Array.isArray(inspector?.issues)) throw new Error("raw Skillspector report unavailable");
+  if (inspector.execution_successful === false) throw new Error("raw Skillspector execution failed");
+  const findings = inspector.issues.map(issue => ({
+    title: issue.pattern, severity: issue.severity, category: issue.category,
+    confidence: issue.confidence, file: issue.location?.file ?? "(no file)",
+    line: issue.location?.start_line ?? "?", description: issue.explanation ?? issue.finding ?? "",
+    excerpt: issue.code_snippet ?? "",
+  }));
+  if (!Array.isArray(reports?.aig?.runs)) throw new Error("raw A.I.G report unavailable");
+  for (const run of reports.aig.runs) {
+    if (!Array.isArray(run.results)) throw new Error("raw A.I.G results unavailable");
+    for (const issue of run.results) {
+      const location = issue.locations?.[0]?.physicalLocation;
+      findings.push({title: issue.message?.text ?? issue.ruleId, severity: issue.level,
+        category: issue.ruleId, confidence: "n/a", file: location?.artifactLocation?.uri ?? "(no file)",
+        line: location?.region?.startLine ?? "?", description: issue.properties?.description ?? "", excerpt: ""});
+    }
   }
-  return out;
+  return { findings, issueCount: inspector.issues.length, coverage: inspector.analysis_completeness?.status };
 };
 
 for (const slug of slugs) {
@@ -96,14 +83,17 @@ for (const slug of slugs) {
       if (d.rating !== "ok") console.log(`    - [${d.rating}] ${d.label}: ${d.detail}`);
     }
 
-    const details = await fetch(`${REGISTRY}/${OWNER}/skills/${slug}/security-audit`, { signal: AbortSignal.timeout(30000) });
-    if (!details.ok) throw new Error(`scan details HTTP ${details.status}`);
-    const html = await details.text();
-    const findings = findingsOf(html);
-    if (findings.length < (ss?.issueCount ?? 0)) throw new Error("scan details incomplete: fewer findings than the summary");
+    const requestedVersion = scan?.version?.version;
+    const suffix = requestedVersion ? "?version=" + encodeURIComponent(requestedVersion) : "";
+    const details = await fetch(`${REGISTRY}/api/v1/skills/${slug}/verify${suffix}`, { signal: AbortSignal.timeout(30000) });
+    if (!details.ok) throw new Error(`raw scan reports HTTP ${details.status}`);
+    const verification = await details.json();
+    if (requestedVersion && verification.version !== requestedVersion) throw new Error("raw report version differs from summary");
+    const { findings, issueCount, coverage } = findingsOf(verification);
+    if (!Number.isInteger(ss?.issueCount) || issueCount !== ss.issueCount) throw new Error("raw report issue count differs from summary");
+    if (coverage) console.log(`  scanner coverage: ${coverage} (this is not a security pass)`);
     if (!findings.length) {
-      // Only a completed scanner with zero reported issues establishes an empty result.
-      if (ss?.issueCount !== 0 || /pending|running|error|failed/i.test(ss?.status || "unknown")) throw new Error("scan details unavailable or scanner incomplete");
+      if (/pending|running|error|failed/i.test(ss?.status || "unknown")) throw new Error("scanner incomplete");
       console.log("  findings: none");
       continue;
     }
