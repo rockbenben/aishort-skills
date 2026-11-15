@@ -151,7 +151,7 @@ export const useAutoUpdate = ({ startupDelay = 3000, checkInterval = 24 * 60 * 6
   const confirm = useCallback((r: UpdateCheckResult) => {
     const dialog = modal.confirm({
       title: "Update Available",
-      content: `Version ${r.version} downloaded. Install now and restart?`,
+      content: "Version " + r.version + " downloaded. Install now and restart?",
       okText: "Install Now",
       cancelText: "Skip This Version",
       onOk: async () => {
@@ -288,8 +288,8 @@ export function useLanguagePreference(valid: string[]) {
     // storage on this path.
     const pref = read() ?? DEFAULT_LOCALE;
     if (valid.includes(pref) && pref !== cur) {
-      const next = `/${pref}${pathname.slice(cur.length + 1)}`;
-      router.replace(`${next}${window.location.search}${window.location.hash}`); // soft, once
+      const next = "/" + pref + pathname.slice(cur.length + 1);
+      router.replace(next + window.location.search + window.location.hash); // soft, once
     }
   }, [pathname, router, valid]);
 }
@@ -306,12 +306,12 @@ const onPick = (locale: string) => {
   const segments = pathname.split("/");
   segments[1] = locale;
   const next = segments.join("/");
-  router.push(`${next}${window.location.search}${window.location.hash}`); // SOFT nav — works in Tauri
+  router.push(next + window.location.search + window.location.hash); // SOFT nav — works in Tauri
 };
 ```
 
-> Skip the whole hook if you don't need cross-launch memory — plain `router.push` in the
-> switcher is all switching itself requires.
+> Cross-launch language memory is optional. Applications without it can use
+> the router directly for locale switching.
 
 ---
 

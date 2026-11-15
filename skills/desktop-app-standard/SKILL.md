@@ -3,7 +3,7 @@ name: desktop-app-standard
 description: Build, maintain or audit Tauri/Electron desktop apps, including dependencies, packaging, updates and CI. Next.js shell migration uses the corresponding nextjs-to-tauri or nextjs-to-electron Skill. 支持只读巡检，以及明确请求的 .NET SDK/TFM 静态审计；局部修复也检查已采用的建议依赖升级。
 
 metadata:
-  version: "0.9.21"
+  version: "0.9.22"
   openclaw:
     homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/desktop-app-standard
     emoji: "📐"

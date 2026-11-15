@@ -658,9 +658,9 @@ if (require.main === module) {
         var wanted = days > 0 ? [expiryRule(days)] : [];
 
         if (!wanted.length && !others.length) {
-          // Ours is gone and there is nothing of anyone else's left, so the honest end
-          // state is an empty configuration — and getting there needs DELETE. Safe
-          // precisely because the read above proved there is nothing left to lose.
+          // No md-web rule or user-owned rule remains. The lifecycle document
+          // is empty, so DELETE preserves all retained rules. The read above
+          // establishes this precondition before any policy write.
           if (!parsed.hadRules) {
             console.log("  Lifecycle: nothing to remove");
             return null;

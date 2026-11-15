@@ -161,7 +161,9 @@ test('record and verify CLI use local built bytes and preserve existing evidence
     const script = fileURLToPath(new URL('../scripts/release-assets.mjs', import.meta.url));
     const run = (mode, changes = {}) => spawnSync(process.execPath, [script, mode], {cwd: temporary, encoding: 'utf8', env: {...env, ...changes}});
     assert.equal(run('record').status, 0);
+    fs.writeFileSync(path.join(dist, 'SHA256SUMS'), 'checksum from a previous attempt');
     assert.equal(run('verify').status, 0);
+    assert.equal(fs.existsSync(path.join(dist, 'SHA256SUMS')), false, 'verification discards only its regenerated checksum output');
     const proof = path.join(temporary, 'release-evidence', data.target + '.json');
     const original = fs.readFileSync(proof, 'utf8');
     assert.notEqual(run('record', {TAG: 'v9.9.9'}).status, 0);

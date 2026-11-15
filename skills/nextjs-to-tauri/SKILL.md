@@ -3,7 +3,7 @@ name: nextjs-to-tauri
 description: Use when converting a Next.js 16 App Router static export into a Tauri 2 desktop app. Next.js 静态导出转 Tauri 2 / 打包 Next.js 为 Tauri 桌面应用. Covers native shell, tray, optional updater and GitHub Actions. Existing Tauri maintenance uses desktop-app-standard.
 
 metadata:
-  version: "1.1.19"
+  version: "1.1.20"
   openclaw:
     homepage: https://github.com/rockbenben/aishort-skills/tree/main/skills/nextjs-to-tauri
     emoji: "🦀"

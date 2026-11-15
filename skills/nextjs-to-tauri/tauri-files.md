@@ -75,7 +75,7 @@ Choose the WebView2 deployment mode for the target environment. `downloadBootstr
 The production CSP starts with bundled resources and Tauri IPC; Tauri adds hashes/nonces for bundled scripts at compile time. Inline styles support the sample UI library. Add only the application's actual remote origins, workers or WebAssembly requirements and verify the packaged app; do not replace the policy with `null` to hide a blocked resource. See [Tauri CSP](https://v2.tauri.app/security/csp/).
 
 - `url` — the app's **default locale directory**, e.g. `"/en/"` when the default locale is `en` (single-locale apps: `"/"`). It is a configurable value, not a fixed locale: point it at whichever locale the app should start in and keep it in sync with the app's `DEFAULT_LOCALE` (frontend-integration.md) — the app opens there until the user picks another language. Why a trailing slash: SKILL.md gotcha #1.
-- `dragDropEnabled: false` — counter-intuitive but required if the page has a drop zone. Tauri's own schema says disabling it "is required to use HTML5 drag and drop on the frontend on Windows"; leave it at the default `true` and the webview swallows the drop, so a file-drop UI does nothing with no error. Drop this line only if nothing in the app accepts a dropped file.
+- `dragDropEnabled: false` enables the frontend HTML5 drop zone on Windows. With the default value, the webview handles file drops before frontend handlers receive them. Applications without a frontend drop zone can retain the Tauri default.
 
 ---
 
